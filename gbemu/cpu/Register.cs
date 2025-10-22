@@ -35,6 +35,47 @@ namespace gbemu {
                 L = (byte) (value & 0xff);
             }
         }
+
+        internal ushort HLI() {
+            HL = (ushort) ((HL + 1) & 0xffff);
+            return (ushort) ((HL - 1) & 0xffff);
+        }
+
+        internal ushort HLD() {
+            HL = (ushort) ((HL - 1) & 0xFFFF);
+            return (ushort) ((HL + 1) & 0xFFFF);
+        }
+
+        internal void SetFlag(CpuFlag flag, bool set) {
+            if (set) {
+                F |= (byte) flag;
+            } else {
+                F &= (byte) flag;
+            }
+
+            F &= 0x00f0;
+        }
+
+        internal bool GetFlag(CpuFlag flag) {
+            return (F & (byte) flag) == (byte) flag;
+        }
+
+        public void Clear() {
+            AF = 0;
+            BC = 0;
+            DE = 0;
+            HL = 0;
+            program_counter = 0;
+            stack_pointer = 0;
+        }
+
+    }
+
+    internal enum CpuFlag : byte {
+        ZERO_FLAG = 0x80,
+        SUBTRACT_FLAG = 0x40,
+        HALF_CARRY_FLAG = 0x20,
+        CARRY_FLAG = 0x10
     }
 
 }
