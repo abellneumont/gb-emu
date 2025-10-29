@@ -1,13 +1,20 @@
-namespace gbemu {
+using System;
+using System.IO;
+using System.Linq;
 
-    public abstract class Cartridge {
+namespace gbemu.cartridge
+{
 
-        public static Cartridge Create(byte[] data) {
-            if (data.Length < 0x150) {
+    public abstract class Cartridge
+    {
+
+        public static Cartridge Create(byte[] data)
+        {
+            if (data.Length < 0x150)
                 throw new InvalidDataException();
-            }
 
-            return (CartridgeType) data[0x147] switch {
+            return (CartridgeType) data[0x147] switch
+            {
                 CartridgeType.ROM => new RomCartridge(data),
                 CartridgeType.MBC1 => new MBC1Cartridge(data),
                 CartridgeType.MBC1_RAM => new MBC1Cartridge(data),
@@ -47,9 +54,10 @@ namespace gbemu {
         protected byte[] ram;
 
         protected bool ram_enabled;
-        protected int rom_bank, ram_bank;
+        protected int rom_bank = 1, ram_bank = 0;
 
-        internal Cartridge(byte[] data) {
+        internal Cartridge(byte[] data)
+        {
             this.data = data;
             this.ram = new byte[RAM_TYPE.NumBanks() * CartridgeRam.BANK_SIZE];
             this.ram_enabled = false;
@@ -61,13 +69,15 @@ namespace gbemu {
 
         public CartridgeRamType RAM_TYPE => (CartridgeRamType) data[0x149];
 
-        public bool validateHeader() { // https://gbdev.io/pandocs/The_Cartridge_Header.html#014d--header-checksum
+        public bool validateHeader()
+        { // https://gbdev.io/pandocs/The_Cartridge_Header.html#014d--header-checksum
             int checksum = data[0x134..0x14d].Aggregate(0, (total, each) => total - each - 1);
 
             return checksum == data[0x14d];
         }
 
-        public bool validateROM() { // https://gbdev.io/pandocs/The_Cartridge_Header.html#014e-014f--global-checksum
+        public bool validateROM()
+        { // https://gbdev.io/pandocs/The_Cartridge_Header.html#014e-014f--global-checksum
             int checksum = data[..0x14d].Aggregate(0, (total, each) => total + each);
 
             return checksum == (ushort) (data[0x14e] << 8 | data[0x14f]);

@@ -1,32 +1,33 @@
-namespace gbemu {
+namespace gbemu.cartridge
+{
     
-    internal class RomCartridge : Cartridge {
+    internal class RomCartridge : Cartridge
+    {
 
         public RomCartridge(byte[] data) : base(data) { }
 
-        internal override byte ReadRom(ushort address) {
-            return data[address % data.Length];
+        internal override byte ReadRom(ushort address)
+        {
+            if (address < ROM_BANK_SIZE)
+                return data[address % data.Length];
+
+            if (address < ROM_BANK_SIZE * 2)
+            {
+                int bank_address = address + (rom_bank - 1) * ROM_BANK_SIZE;
+                return data[bank_address % data.Length];
+            }
+
+            return 0;
         }
 
         internal override void WriteRom(ushort address, byte value) { }
 
-        internal override byte ReadRam(ushort address) {
-            if (ram.Length == 0 || !ram_enabled) {
-                return 0xff;
-            }
-
-            int bank_address = (address - RAM_ADDRESS_START + ram_bank * CartridgeRam.BANK_SIZE) % ram.Length;
-
-            return ram[bank_address];
+        internal override byte ReadRam(ushort address)
+        {
+            return 0xff;
         }
 
-        internal override void WriteRam(ushort address, byte value) {
-            if (ram.Length > 0 && ram_enabled) {
-                int bank_address = (address - RAM_ADDRESS_START + ram_bank * CartridgeRam.BANK_SIZE) % ram.Length;
-
-                ram[bank_address] = value;
-            }
-        }
+        internal override void WriteRam(ushort address, byte value) { }
 
     }
 }

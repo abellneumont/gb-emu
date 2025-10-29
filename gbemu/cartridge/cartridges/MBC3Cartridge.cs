@@ -1,8 +1,13 @@
-namespace gbemu {
+using System;
 
-    internal class MBC3Cartridge : RomCartridge {
+namespace gbemu.cartridge
+{
 
-        public enum TimerType : byte {
+    internal class MBC3Cartridge : RomCartridge
+    {
+
+        public enum TimerType : byte
+        {
 
             SECONDS = 0x08,
             MINUTES = 0x09,
@@ -17,15 +22,17 @@ namespace gbemu {
 
         public MBC3Cartridge(byte[] data) : base(data) { }
 
-        internal override byte ReadRam(ushort address) {
-            if (!ram_enabled) {
+        internal override byte ReadRam(ushort address)
+        {
+            if (!ram_enabled)
                 return 0xff;
-            }
 
-            if (timer_selection.HasValue) {
+            if (timer_selection.HasValue)
+            {
                 DateTime time = paused_time.HasValue ? paused_time.Value : DateTime.UtcNow;
 
-                return timer_selection switch {
+                return timer_selection switch
+                {
                     TimerType.SECONDS => (byte) time.Second,
                     TimerType.MINUTES => (byte) time.Minute,
                     TimerType.HOURS => (byte) time.Hour,
@@ -39,34 +46,36 @@ namespace gbemu {
         }
 
         internal override void WriteRom(ushort address, byte value) {
-            if (address <= 0x1fff) {
+            if (address <= 0x1fff)
                 ram_enabled = (value & 0x0f) == 0x0a;
-            }
             
-            if (address >= 0x2000 && address <= 0x3fff) {
+            if (address >= 0x2000 && address <= 0x3fff)
+            {
                 rom_bank = (value & 0x7f) % ROM_TYPE.NumBanks();
 
-                if (rom_bank == 0x0) {
+                if (rom_bank == 0x0)
                     rom_bank = 0x1;
-                }
             }
             
-            if (address >= 0x4000 && address <= 0x5fff) {
-                if (value <= 0x3) {
+            if (address >= 0x4000 && address <= 0x5fff)
+            {
+                if (value <= 0x3)
+                {
                     ram_bank = (value & 0x7f) % RAM_TYPE.NumBanks();
                     timer_selection = null;
-                } else if (value >= 0x8 && value <= 0xc) {
-                    timer_selection = (TimerType) value;
                 }
+                else if (value >= 0x8 && value <= 0xc)
+                    timer_selection = (TimerType) value;
             }
 
-            if (address < 0x7fff) {
-                if (value == 0x1) {
-                    if (paused_time.HasValue) {
+            if (address < 0x7fff)
+            {
+                if (value == 0x1)
+                {
+                    if (paused_time.HasValue)
                         paused_time = null;
-                    } else {
+                    else
                         paused_time = DateTime.UtcNow;
-                    }
                 }
             }
         }

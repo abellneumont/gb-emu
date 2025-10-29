@@ -1,6 +1,10 @@
-namespace gbemu {
+using System;
+
+namespace gbemu.cartridge
+{
     
-    public enum CartridgeRamType : byte { // https://gbdev.io/pandocs/The_Cartridge_Header.html#0149--ram-size
+    public enum CartridgeRamType : byte
+    { // https://gbdev.io/pandocs/The_Cartridge_Header.html#0149--ram-size
         NO_RAM = 0x00,
         A8KiB = 0x02,
         A32KiB = 0x03,
@@ -8,11 +12,13 @@ namespace gbemu {
         A64KiB = 0x05
     }
 
-    public static class CartridgeRam {
+    public static class CartridgeRam
+    {
 
         public const int BANK_SIZE = 0x2000;
 
-        public static int NumBanks(this CartridgeRamType ramType) {
+        public static int NumBanks(this CartridgeRamType ramType)
+        {
             return ramType switch {
                 CartridgeRamType.NO_RAM => 0,
                 CartridgeRamType.A8KiB => 1,

@@ -1,6 +1,10 @@
-namespace gbemu {
+using System;
 
-    public enum CartridgeRomType {
+namespace gbemu.cartridge
+{
+
+    public enum CartridgeRomType
+    {
         A32KB = 0x00,
         A64KB = 0x01,
         A128KB = 0x02,
@@ -15,9 +19,11 @@ namespace gbemu {
         A1p3MB = 0x54,
     }
 
-    public static class CartridgeRom {
+    public static class CartridgeRom
+    {
 
-        public static int NumBanks(this CartridgeRomType romType) {
+        public static int NumBanks(this CartridgeRomType romType)
+        {
             return romType switch {
                 CartridgeRomType.A32KB => 0,
                 CartridgeRomType.A64KB => 4,

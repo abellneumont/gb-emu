@@ -1,6 +1,8 @@
-namespace gbemu {
+namespace gbemu.cartridge
+{
 
-    public enum CartridgeType : byte { // https://gbdev.io/pandocs/The_Cartridge_Header.html#0147--cartridge-type
+    public enum CartridgeType : byte
+    { // https://gbdev.io/pandocs/The_Cartridge_Header.html#0147--cartridge-type
         ROM = 0x00,
         MBC1 = 0x01,
         MBC1_RAM = 0x02,

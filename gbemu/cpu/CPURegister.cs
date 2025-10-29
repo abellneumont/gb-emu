@@ -1,10 +1,16 @@
-namespace gbemu {
+using gbemu.cpu;
 
-    internal class Register { // https://gbdev.io/pandocs/CPU_Registers_and_Flags.html
+namespace gbemu.cpu
+{
+
+    internal class CPURegister
+    { // https://gbdev.io/pandocs/CPU_register_and_Flags.html
+
         internal byte A, B, C, D, E, F, H, L;
         internal ushort program_counter, stack_pointer;
 
-        internal ushort AF {
+        internal ushort AF
+        {
             get => (ushort) ((A << 8) | F);
             set {
                 A = (byte) (value >> 8);
@@ -12,7 +18,8 @@ namespace gbemu {
             }
         }
 
-        internal ushort BC {
+        internal ushort BC
+        {
             get => (ushort) ((B << 8) | C);
             set {
                 B = (byte) (value >> 8);
@@ -20,7 +27,8 @@ namespace gbemu {
             }
         }
         
-        internal ushort DE {
+        internal ushort DE
+        {
             get => (ushort) ((D << 8) | E);
             set {
                 D = (byte) (value >> 8);
@@ -28,7 +36,8 @@ namespace gbemu {
             }
         }
         
-        internal ushort HL {
+        internal ushort HL
+        {
             get => (ushort) ((H << 8) | L);
             set {
                 H = (byte) (value >> 8);
@@ -36,17 +45,20 @@ namespace gbemu {
             }
         }
 
-        internal ushort HLI() {
+        internal ushort HLI()
+        {
             HL = (ushort) ((HL + 1) & 0xffff);
             return (ushort) ((HL - 1) & 0xffff);
         }
 
-        internal ushort HLD() {
+        internal ushort HLD()
+        {
             HL = (ushort) ((HL - 1) & 0xFFFF);
             return (ushort) ((HL + 1) & 0xFFFF);
         }
 
-        internal void SetFlag(CpuFlag flag, bool set) {
+        internal void SetFlag(CpuFlag flag, bool set)
+        {
             if (set) {
                 F |= (byte) flag;
             } else {
@@ -56,11 +68,13 @@ namespace gbemu {
             F &= 0x00f0;
         }
 
-        internal bool GetFlag(CpuFlag flag) {
+        internal bool GetFlag(CpuFlag flag)
+        {
             return (F & (byte) flag) == (byte) flag;
         }
 
-        public void Clear() {
+        public void Clear()
+        {
             AF = 0;
             BC = 0;
             DE = 0;
@@ -71,7 +85,8 @@ namespace gbemu {
 
     }
 
-    internal enum CpuFlag : byte {
+    internal enum CpuFlag : byte
+    {
         ZERO_FLAG = 0x80,
         SUBTRACT_FLAG = 0x40,
         HALF_CARRY_FLAG = 0x20,
