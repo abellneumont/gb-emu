@@ -1,42 +1,37 @@
-namespace gbemu.cartridge
+﻿namespace gbemu.cartridge
 {
-
-    internal class MBC5Cartridge : RomCartridge
+    internal class MBC5Cartridge : Cartridge
     {
+        private byte rom_bank0;
+        private byte rom_bank1;
 
-        private readonly byte[] bank_registers;
-
-        public MBC5Cartridge(byte[] data) : base(data)
+        public MBC5Cartridge(byte[] contents) : base(contents)
         {
-            this.bank_registers = new byte[2];
         }
 
         internal override void WriteRom(ushort address, byte value)
         {
-            if (address <= 0x1fff)
-                ram_enabled = (value & 0x0f) == 0x0a;
-
-            if (address >= 0x2000 && address <= 0x2fff)
+            if (address <= 0x1FFF)
             {
-                bank_registers[0] = value;
-                rom_bank = ((bank_registers[1] << 8) | bank_registers[0]) % ROM_TYPE.NumBanks();
+                ram_enabled = (value & 0x0F) == 0x0A;
             }
-
-            if (address >= 0x3000 && address <= 0x3fff)
+            else if (address >= 0x2000 && address <= 0x2FFF)
             {
-                bank_registers[1] = (byte) (value & 0b00000001); // Only last bit is used?
-                rom_bank = ((bank_registers[1] << 8) | bank_registers[0]) % ROM_TYPE.NumBanks();
+                rom_bank0 = value;
+                rom_bank = ((rom_bank1 << 8) | rom_bank0) % ROMSize.NumberBanks();
             }
-
-            if (address >= 0x4000 && address <= 0x5fff)
+            else if (address >= 0x3000 && address <= 0x3FFF)
             {
-                if (ram.Length == 0)
+                rom_bank1 = (byte)(value & 0b0000_0001);
+                rom_bank = ((rom_bank1 << 8) | rom_bank0) % ROMSize.NumberBanks();
+            }
+            else if (address >= 0x4000 && address <= 0x5FFF)
+            {
+                if (RAMSize == CartridgeRAMSize.NONE)
                     ram_bank = 0;
                 else
-                    ram_bank = (value & 8) % RAM_TYPE.NumBanks();
+                    ram_bank = (value & 8) % RAMSize.NumberBanks();
             }
         }
-
     }
-
 }

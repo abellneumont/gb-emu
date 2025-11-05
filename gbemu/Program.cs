@@ -1,44 +1,49 @@
-﻿using gbemu;
+﻿using System.IO;
+using CommandLine;
 using gbemu.cartridge;
-using System.Threading;
-using System.IO;
-using System.Diagnostics;
-using sdl2cs;
+using gbemu.screen;
 
-byte[] bytes = File.ReadAllBytes("C:\\Users\\masterdash5\\Downloads\\tetris.gb");
-Cartridge cartridge = Cartridge.Create(bytes);
-Bus bus = new Bus(cartridge);
-var CPU = bus.cpu.Tick().GetEnumerator();
-var stopwatch = new Stopwatch();
-
-const int CLOCK_FRAME = 70256;
-var delay = CLOCK_FRAME;
-var fps = (int)((1.0 / 60) * 1000);
-
-while (true)
+namespace gbemu
 {
-    stopwatch.Start();
-
-    CPU.MoveNext();
-    bus.dma.Step(4);
-    bus.ppu.Tick();
-    bus.timer.Step();
-    bus.cycles += 4;
-
-    delay -= 4;
-
-    if (delay < 0)
+    public class CommandLineOptions(string romFilePath, string bootRomFilePath, int framesPerSecond, int pixelSize, DeviceType mode)
     {
-        delay += CLOCK_FRAME;
-        var sleep = fps - (stopwatch.ElapsedTicks / (double)Stopwatch.Frequency) * 1000;
+        [Value(0, HelpText = "The full file path to a binary rom dump", MetaName = "RomFilePath", Required = true)]
+        public string RomFilePath { get; } = romFilePath;
 
-        if (sleep > 0)
-        {
-            //SDL2.SDL_Delay((uint)sleep);
-            Thread.Sleep((int)sleep);
-        }
+        [Option("bootRomFilePath", Required = false)]
+        public string BootRomFilePath { get; } = bootRomFilePath;
 
-        stopwatch.Restart();
+        [Option('s', "framesPerSecondCap", Default = 60)]
+        public int FramesPerSecond { get; } = framesPerSecond;
+
+        [Option('p', "pixelSize", Default = 4)]
+        public int PixelSize { get; } = pixelSize;
+
+        [Option("mode", Default = DeviceType.DMG)]
+        public DeviceType Mode { get; } = mode;
     }
 
+    internal class Program
+    {
+        private static int Main(string[] args)
+        {
+            return Parser.Default.ParseArguments<CommandLineOptions>(args)
+                .MapResult(RunProgram, _ => -1);
+        }
+
+        private static int RunProgram(CommandLineOptions options)
+        {
+            byte[] romBytes = File.ReadAllBytes(options.RomFilePath);
+
+            using var screen = new Screen(
+                CartridgeFactory.CreateCartridge(romBytes),
+                options.Mode,
+                options.PixelSize,
+                (options.BootRomFilePath == null) ? null : File.ReadAllBytes(options.BootRomFilePath),
+                options.FramesPerSecond);
+            screen.ExecuteProgram();
+
+            return 0;
+        }
+    }
 }

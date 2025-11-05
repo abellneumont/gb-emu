@@ -1,248 +1,32 @@
+﻿using gbemu.interrupts;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 
 namespace gbemu.cpu
 {
-
-    internal class CPU
+    internal class CPU : IEnumerable<int>
     {
+        private readonly ALU alu;
+        private readonly Device device;
 
-        private Bus bus;
-        internal CPURegister register;
-
-        private bool halted, stopped, processing;
+        private bool halted;
+        private bool halted_bug_state;
+        internal bool stopped;
         private int interrupt_cooldown;
+        internal bool processing_intruction;
 
-        public CPU(Bus bus)
+        internal Registers Registers { get; }
+
+        internal CPU(Device device)
         {
-            this.bus = bus;
-            this.register = new CPURegister();
+            Registers = new Registers();
+            alu = new ALU(this);
+            this.device = device;
+            Reset();
         }
 
-        private void Increment(ref byte value)
-        {
-            byte result = (byte) (value + 1);
-
-            register.SetFlag(CpuFlag.ZERO_FLAG, result == 0);
-            register.SetFlag(CpuFlag.SUBTRACT_FLAG, false);
-            register.SetFlag(CpuFlag.HALF_CARRY_FLAG, (value & 0x0f) + 1 > 0x0f);
-
-            value = result;
-        }
-
-        internal void Decrement(ref byte value)
-        {
-            byte result = (byte) (value - 1);
-
-            register.SetFlag(CpuFlag.ZERO_FLAG, result == 0);
-            register.SetFlag(CpuFlag.SUBTRACT_FLAG, true);
-            register.SetFlag(CpuFlag.HALF_CARRY_FLAG, (value & 0x0f) < 0x01);
-
-            value = result;
-        }
-
-        internal void ShiftLeft(ref byte value)
-        {
-            register.SetFlag(CpuFlag.CARRY_FLAG, (value & 0x80) == 0x80);
-            register.SetFlag(CpuFlag.HALF_CARRY_FLAG | CpuFlag.SUBTRACT_FLAG, false);
-
-            value = (byte)(value << 1);
-
-            register.SetFlag(CpuFlag.ZERO_FLAG, value == 0);
-        }
-
-        internal void ShiftRight(ref byte value)
-        {
-            register.SetFlag(CpuFlag.CARRY_FLAG, (value & 0x01) == 0x01);
-            register.SetFlag(CpuFlag.HALF_CARRY_FLAG | CpuFlag.SUBTRACT_FLAG, false);
-
-            value = (byte)(value >> 1);
-
-            register.SetFlag(CpuFlag.ZERO_FLAG, value == 0);
-        }
-
-        internal void ShiftRightAdjust(ref byte value)
-        {
-            register.SetFlag(CpuFlag.CARRY_FLAG, (value & 0x01) == 0x01);
-            register.SetFlag(CpuFlag.HALF_CARRY_FLAG | CpuFlag.SUBTRACT_FLAG, false);
-
-            value = (byte)((value >> 1) | (value & 0x80));
-
-            register.SetFlag(CpuFlag.ZERO_FLAG, value == 0);
-        }
-
-        internal void Swap(ref byte value)
-        {
-            register.SetFlag(CpuFlag.HALF_CARRY_FLAG | CpuFlag.SUBTRACT_FLAG | CpuFlag.CARRY_FLAG, false);
-            value = (byte) ((value >> 4) | (value << 4));
-            register.SetFlag(CpuFlag.ZERO_FLAG, value == 0);
-        }
-
-        internal void Bit(byte value, int bit)
-        {
-            register.SetFlag(CpuFlag.SUBTRACT_FLAG, false);
-            register.SetFlag(CpuFlag.HALF_CARRY_FLAG, true);
-            register.SetFlag(CpuFlag.ZERO_FLAG, (value & (1 << bit)) == 0);
-        }
-
-        internal void Res(ref byte value, int bit)
-        {
-            value = (byte)(value & ~(1 << bit));
-        }
-
-        internal void Set(ref byte value, int bit)
-        {
-            value = (byte) (value | (1 << bit));
-        }
-
-        internal void Add(ref byte first, byte second, bool carry)
-        {
-            int c = carry && register.GetFlag(CpuFlag.CARRY_FLAG) ? 1 : 0;
-            int result = first + second + c;
-
-            register.SetFlag(CpuFlag.ZERO_FLAG, (result & 0xff) == 0x0);
-            register.SetFlag(CpuFlag.SUBTRACT_FLAG, false);
-            register.SetFlag(CpuFlag.HALF_CARRY_FLAG, (((first & 0xf) + (second & 0xf) + (c & 0xf)) & 0x10) == 0x10);
-            register.SetFlag(CpuFlag.CARRY_FLAG, result > 0xff);
-
-            first = (byte)result;
-        }
-
-        internal void Sub(ref byte first, byte second, bool carry)
-        {
-            int c = carry && register.GetFlag(CpuFlag.CARRY_FLAG) ? 1 : 0;
-            int result = first - second - c;
-
-            register.SetFlag(CpuFlag.ZERO_FLAG, (result & 0xff) == 0x0);
-            register.SetFlag(CpuFlag.SUBTRACT_FLAG, true);
-            register.SetFlag(CpuFlag.HALF_CARRY_FLAG, (first & 0x0f) < (second & 0x0f) + c);
-            register.SetFlag(CpuFlag.CARRY_FLAG, result < 0);
-
-            first = (byte)result;
-        }
-
-        internal void And(ref byte first, byte second)
-        {
-            int result = first & second;
-
-            register.SetFlag(CpuFlag.ZERO_FLAG, result == 0);
-            register.SetFlag(CpuFlag.CARRY_FLAG | CpuFlag.SUBTRACT_FLAG, false);
-            register.SetFlag(CpuFlag.HALF_CARRY_FLAG, true);
-
-            first = (byte)result;
-        }
-
-        internal void Xor(ref byte first, byte second)
-        {
-            int result = first ^ second;
-
-            register.SetFlag(CpuFlag.ZERO_FLAG, result == 0);
-            register.SetFlag(CpuFlag.CARRY_FLAG | CpuFlag.SUBTRACT_FLAG | CpuFlag.HALF_CARRY_FLAG, false);
-
-            first = (byte)result;
-        }
-
-        internal void Or(ref byte first, byte second)
-        {
-            int result = first | second;
-
-            register.SetFlag(CpuFlag.ZERO_FLAG, result == 0);
-            register.SetFlag(CpuFlag.CARRY_FLAG | CpuFlag.SUBTRACT_FLAG | CpuFlag.HALF_CARRY_FLAG, false);
-
-            first = (byte)result;
-        }
-
-        internal void RotateLeft(ref byte value)
-        {
-            bool carry = (value & 0x80) == 0x80;
-            value = (byte)((value << 1) | (register.GetFlag(CpuFlag.CARRY_FLAG) ? 0x1 : 0x0));
-
-            register.SetFlag(CpuFlag.HALF_CARRY_FLAG | CpuFlag.SUBTRACT_FLAG, false);
-            register.SetFlag(CpuFlag.CARRY_FLAG, carry);
-            register.SetFlag(CpuFlag.ZERO_FLAG, value == 0x0);
-        }
-
-        internal void RotateLeftCarry(ref byte value)
-        {
-            register.SetFlag(CpuFlag.HALF_CARRY_FLAG | CpuFlag.SUBTRACT_FLAG, false);
-            register.SetFlag(CpuFlag.CARRY_FLAG, value > 0x7f);
-
-            value = (byte) ((value << 1) | (value >> 7));
-
-            register.SetFlag(CpuFlag.ZERO_FLAG, value == 0x0);
-        }
-
-        internal void RotateRight(ref byte value)
-        {
-            bool carry = (value & 0x1) == 0x1;
-            value = (byte)((value >> 1) | (register.GetFlag(CpuFlag.CARRY_FLAG) ? 0x80 : 0x0));
-
-            register.SetFlag(CpuFlag.HALF_CARRY_FLAG | CpuFlag.SUBTRACT_FLAG, false);
-            register.SetFlag(CpuFlag.CARRY_FLAG, carry);
-            register.SetFlag(CpuFlag.ZERO_FLAG, value == 0x0);
-        }
-
-        internal void RotateRightCarry(ref byte value)
-        {
-            register.SetFlag(CpuFlag.HALF_CARRY_FLAG | CpuFlag.SUBTRACT_FLAG, false);
-            register.SetFlag(CpuFlag.CARRY_FLAG, (value & 0x1) == 0x1);
-
-            value = (byte) ((value >> 1) | ((value & 1) << 7));
-
-            register.SetFlag(CpuFlag.ZERO_FLAG, value == 0x0);
-        }
-
-        internal void DecimalAdjustRegister(ref byte address)
-        {
-            int tmp = address;
-
-            if (!register.GetFlag(CpuFlag.SUBTRACT_FLAG))
-            {
-                if (register.GetFlag(CpuFlag.HALF_CARRY_FLAG) || (tmp & 0x0F) > 9)
-                    tmp += 0x06;
-                if (register.GetFlag(CpuFlag.CARRY_FLAG) || tmp > 0x9F)
-                    tmp += 0x60;
-            }
-            else
-            {
-                if (register.GetFlag(CpuFlag.HALF_CARRY_FLAG))
-                {
-                    tmp -= 0x06;
-                    if (!register.GetFlag(CpuFlag.CARRY_FLAG))
-                        tmp &= 0xFF;
-                }
-                if (register.GetFlag(CpuFlag.CARRY_FLAG))
-                    tmp -= 0x60;
-            }
-
-            address = (byte)tmp;
-            register.SetFlag(CpuFlag.ZERO_FLAG, address == 0x0);
-
-            if (tmp > 0xFF)
-                register.SetFlag(CpuFlag.CARRY_FLAG, true);
-
-            register.SetFlag(CpuFlag.HALF_CARRY_FLAG, false);
-        }
-
-        internal void AddHL(ushort value)
-        {
-            int result = register.HL + value;
-            register.SetFlag(CpuFlag.SUBTRACT_FLAG, false);
-            register.SetFlag(CpuFlag.HALF_CARRY_FLAG, (register.HL & 0xfff) + (value & 0xfff) > 0xfff);
-            register.SetFlag(CpuFlag.CARRY_FLAG, result > 0xffff);
-
-            register.HL = (ushort) result;
-        }
-
-        private byte Read()
-        {
-            byte read = bus.Read(register.program_counter);
-            register.program_counter++;
-
-            return read;
-        }
-
-        public IEnumerable<int> Tick()
+        public IEnumerator<int> GetEnumerator()
         {
             while (true)
             {
@@ -251,56 +35,65 @@ namespace gbemu.cpu
                     interrupt_cooldown--;
 
                     if (interrupt_cooldown == 0)
-                        bus.InterruptsGloballyEnabled = true;
+                    {
+                        device.interrupt_registers.AreInterruptsEnabledGlobally = true;
+                    }
                 }
 
-                if (!bus.dma.BlockInterrupt())
+                if (!device.dma_controller.BlockInterrupts())
                 {
-                    for (int i = 0; i < 6; i++)
+                    for (var bit = 0; bit < 6; bit++)
                     {
-                        int mask = 1 << i;
-
-                        if ((bus.InterruptEnable & bus.InterruptFlags & mask) == mask)
+                        var mask = 1 << bit;
+                        if ((device.interrupt_registers.InterruptEnable & device.interrupt_registers.InterruptFlags & mask) == mask)
                         {
                             if (halted)
+                            {
                                 halted = false;
+                            }
 
-                            if (stopped)
+                            if (device.cpu.stopped)
                             {
                                 stopped = false;
                                 yield return 1;
                             }
 
-                            if (bus.InterruptsGloballyEnabled)
+                            if (device.interrupt_registers.AreInterruptsEnabledGlobally)
                             {
-                                InterruptType type = (InterruptType)i;
-                                bus.InterruptsGloballyEnabled = false;
-                                bus.ResetInterrupt(type);
+                                var interrupt = (Interrupt)bit;
+
+                                device.interrupt_registers.AreInterruptsEnabledGlobally = false;
+                                device.interrupt_registers.ResetInterrupt(interrupt);
 
                                 yield return 1;
                                 yield return 1;
 
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter >> 8));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(device.cpu.Registers.program_counter >> 8));
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter & 0xff));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(device.cpu.Registers.program_counter & 0xFF));
                                 yield return 1;
 
-                                register.program_counter = type.StartingAddress();
+                                Registers.program_counter = interrupt.StartingAddress();
                                 yield return 1;
                             }
                         }
                     }
                 }
 
-                if (halted || stopped || bus.dma.BlockInterrupt())
+                if (halted || stopped || device.dma_controller.HaltCpu())
                 {
                     yield return 0;
-                } else
+                }
+                else
                 {
-                    byte opcode = Read();
-                    processing = true;
+                    var opcode = Read();
+                    processing_intruction = true;
 
-                    //Console.WriteLine(opcode);
+                    if (halted_bug_state)
+                    {
+                        Registers.program_counter--;
+                        halted_bug_state = false;
+                    }
 
                     switch (opcode)
                     {
@@ -308,941 +101,937 @@ namespace gbemu.cpu
                             break;
                         case 0x01:
                             {
-                                byte first = Read();
+                                var first = Read();
                                 yield return 1;
-                                byte second = Read();
+                                var second = Read();
                                 yield return 1;
-                                register.BC = (ushort)(first | (second << 8));
+                                Registers.BC = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0x02:
-                            bus.Write(register.BC, register.A);
+                            device.bus.WriteByte(Registers.BC, Registers.A);
                             yield return 1;
                             break;
                         case 0x03:
-                            register.BC++;
+                            Registers.BC++;
                             yield return 1;
                             break;
                         case 0x04:
-                            Increment(ref register.B);
+                            alu.Increment(ref Registers.B);
                             break;
                         case 0x05:
-                            Decrement(ref register.B);
+                            alu.Decrement(ref Registers.B);
                             break;
                         case 0x06:
-                            {
-                                byte read = Read();
-                                yield return 1;
-                                register.B = read;
-                                break;
-                            }
+                            var d8 = Read();
+                            yield return 1;
+                            Registers.B = d8;
+                            break;
                         case 0x07:
-                            RotateLeftCarry(ref register.A);
-                            register.SetFlag(CpuFlag.ZERO_FLAG, false);
+                            alu.RotateLeftCarryA();
                             break;
                         case 0x08:
                             {
-                                byte first = Read();
+                                var first = Read();
                                 yield return 1;
-                                byte second = Read();
+                                var second = Read();
                                 yield return 1;
-                                ushort address = (ushort)(first | (second << 8));
-                                bus.Write(address, (byte)(register.stack_pointer & 0xFF));
+                                var address = (ushort)(first | (second << 8));
+                                device.bus.WriteByte(address, (byte)(Registers.stack_pointer & 0xFF));
                                 yield return 1;
                                 address++;
-                                bus.Write(address, (byte)(register.stack_pointer >> 8));
+                                device.bus.WriteByte(address, (byte)(Registers.stack_pointer >> 8));
                                 yield return 1;
                                 break;
                             }
                         case 0x09:
-                            AddHL(register.BC);
+                            alu.AddHL(Registers.BC);
                             yield return 1;
                             break;
                         case 0x0A:
                             {
-                                byte read = bus.Read(register.BC);
+                                var b = device.bus.ReadByte(Registers.BC);
                                 yield return 1;
-                                register.A = read;
+                                Registers.A = b;
                                 break;
                             }
                         case 0x0B:
-                            register.BC = (ushort)(register.BC - 1);
+                            Registers.BC = (ushort)(Registers.BC - 1);
                             yield return 1;
                             break;
                         case 0x0C:
-                            Increment(ref register.C);
+                            alu.Increment(ref Registers.C);
                             break;
                         case 0x0D:
-                            Decrement(ref register.C);
+                            alu.Decrement(ref Registers.C);
                             break;
                         case 0x0E:
                             {
-                                byte read = Read();
+                                var b = Read();
                                 yield return 1;
-                                register.C = read;
+                                Registers.C = b;
                                 break;
                             }
                         case 0x0F:
-                            RotateRightCarry(ref register.A);
-                            register.SetFlag(CpuFlag.ZERO_FLAG, false);
+                            alu.RotateRightCarryA();
                             break;
                         case 0x10: // STOP
                             {
+                                Read();
+                                yield return 1;
+
                                 stopped = true;
                                 break;
                             }
                         case 0x11:
                             {
-                                byte first = Read();
+                                var first = Read();
                                 yield return 1;
-                                byte second = Read();
+                                var second = Read();
                                 yield return 1;
-                                register.DE = (ushort)(first | (second << 8));
+                                Registers.DE = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0x12:
-                            bus.Write(register.DE, register.A);
+                            device.bus.WriteByte(Registers.DE, Registers.A);
                             yield return 1;
                             break;
                         case 0x13:
-                            register.DE++;
+                            Registers.DE++;
                             yield return 1;
                             break;
                         case 0x14:
-                            Increment(ref register.D);
+                            alu.Increment(ref Registers.D);
                             break;
                         case 0x15:
-                            Decrement(ref register.D);
+                            alu.Decrement(ref Registers.D);
                             break;
                         case 0x16:
                             {
-                                byte read = Read();
+                                var b = Read();
                                 yield return 1;
-                                register.D = read;
+                                Registers.D = b;
                                 break;
                             }
                         case 0x17:
-                            RotateLeft(ref register.A);
-                            register.SetFlag(CpuFlag.ZERO_FLAG, false);
+                            alu.RotateLeftA();
                             break;
                         case 0x18:
                             {
-                                sbyte read = (sbyte)Read();
+                                var r8 = (sbyte)Read();
                                 yield return 1;
-                                register.program_counter = (ushort)((register.program_counter + read) & 0xFFFF);
+                                Registers.program_counter = (ushort)((Registers.program_counter + r8) & 0xFFFF);
                                 yield return 1;
                                 break;
                             }
                         case 0x19:
-                            AddHL(register.DE);
+                            alu.AddHL(Registers.DE);
                             yield return 1;
                             break;
                         case 0x1A:
                             {
-                                byte read = bus.Read(register.DE);
+                                var b = device.bus.ReadByte(Registers.DE);
                                 yield return 1;
-                                register.A = read;
+                                Registers.A = b;
                                 break;
                             }
                         case 0x1B:
-                            register.DE--;
+                            Registers.DE--;
                             yield return 1;
                             break;
                         case 0x1C:
-                            Increment(ref register.E);
+                            alu.Increment(ref Registers.E);
                             break;
                         case 0x1D:
-                            Decrement(ref register.E);
+                            alu.Decrement(ref Registers.E);
                             break;
                         case 0x1E:
                             {
-                                byte read = Read();
+                                var b = Read();
                                 yield return 1;
-                                register.E = read;
+                                Registers.E = b;
                                 break;
                             }
                         case 0x1F:
-                            RotateRight(ref register.A);
-                            register.SetFlag(CpuFlag.ZERO_FLAG, false);
+                            alu.RotateRightA();
                             break;
                         case 0x20:
                             {
-                                sbyte distance = (sbyte)Read();
+                                var distance = (sbyte)Read();
                                 yield return 1;
-
-                                if (register.GetFlag(CpuFlag.ZERO_FLAG))
+                                if (Registers.GetFlag(CpuFlag.ZERO_FLAG))
                                 {
                                     break;
                                 }
 
                                 yield return 1;
-                                register.program_counter = (ushort)((register.program_counter + distance) & 0xFFFF);
+                                Registers.program_counter = (ushort)((Registers.program_counter + distance) & 0xFFFF);
                                 break;
                             }
                         case 0x21:
                             {
-                                byte first = Read();
+                                var first = Read();
                                 yield return 1;
-                                byte second = Read();
+                                var second = Read();
                                 yield return 1;
-                                register.HL = (ushort)(first | (second << 8));
+                                Registers.HL = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0x22:
                             {
-                                ushort address = register.HLI();
-                                bus.Write(address, register.A);
+                                var address = Registers.HLI();
+                                device.bus.WriteByte(address, Registers.A);
                                 yield return 1;
                                 break;
                             }
                         case 0x23:
                             yield return 1;
-                            register.HL++;
+                            Registers.HL++;
                             break;
                         case 0x24:
-                            Increment(ref register.H);
+                            alu.Increment(ref Registers.H);
                             break;
                         case 0x25:
-                            Decrement(ref register.H);
+                            alu.Decrement(ref Registers.H);
                             break;
                         case 0x26:
                             {
-                                byte read = Read();
+                                var b = Read();
                                 yield return 1;
-                                register.H = read;
+                                Registers.H = b;
                                 break;
                             }
                         case 0x27:
-                            DecimalAdjustRegister(ref register.A);
+                            alu.DecimalAdjustRegister(ref Registers.A);
                             break;
                         case 0x28:
                             {
-                                sbyte distance = (sbyte)Read();
+                                var distance = (sbyte)Read();
                                 yield return 1;
-
-                                if (!register.GetFlag(CpuFlag.ZERO_FLAG))
+                                if (!Registers.GetFlag(CpuFlag.ZERO_FLAG))
                                 {
                                     break;
                                 }
 
                                 yield return 1;
-                                register.program_counter = (ushort)((register.program_counter + distance) & 0xFFFF);
+                                Registers.program_counter = (ushort)((Registers.program_counter + distance) & 0xFFFF);
                                 break;
                             }
                         case 0x29:
                             yield return 1;
-                            AddHL(register.HL);
+                            alu.AddHL(Registers.HL);
                             break;
                         case 0x2A:
                             {
-                                byte read = bus.Read(register.HLI());
+                                var b = device.bus.ReadByte(Registers.HLI());
                                 yield return 1;
-                                register.A = read;
+                                Registers.A = b;
                                 break;
                             }
                         case 0x2B:
                             yield return 1;
-                            register.HL--;
+                            Registers.HL--;
                             break;
                         case 0x2C:
-                            Increment(ref register.L);
+                            alu.Increment(ref Registers.L);
                             break;
                         case 0x2D:
-                            Decrement(ref register.L);
+                            alu.Decrement(ref Registers.L);
                             break;
                         case 0x2E:
                             {
-                                byte read = Read();
+                                var b = Read();
                                 yield return 1;
-                                register.L = read;
+                                Registers.L = b;
                                 break;
                             }
                         case 0x2F:
-                            register.A = (byte)(~register.A);
-                            register.SetFlag(CpuFlag.HALF_CARRY_FLAG | CpuFlag.SUBTRACT_FLAG, true);
+                            alu.CPL();
                             break;
                         case 0x30:
                             {
-                                sbyte distance = (sbyte)Read();
+                                var distance = (sbyte)Read();
                                 yield return 1;
-
-                                if (register.GetFlag(CpuFlag.CARRY_FLAG))
+                                if (Registers.GetFlag(CpuFlag.CARRY_FLAG))
                                 {
                                     break;
                                 }
 
                                 yield return 1;
-                                register.program_counter = (ushort)((register.program_counter + distance) & 0xFFFF);
+                                Registers.program_counter = (ushort)((Registers.program_counter + distance) & 0xFFFF);
                                 break;
                             }
                         case 0x31:
                             {
-                                byte first = Read();
+                                var first = Read();
                                 yield return 1;
-                                byte second = Read();
+                                var second = Read();
                                 yield return 1;
-                                register.stack_pointer = (ushort)(first | (second << 8));
+                                Registers.stack_pointer = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0x32:
                             {
-                                ushort address = register.HLD();
-                                bus.Write(address, register.A);
+                                var address = Registers.HLD();
+                                device.bus.WriteByte(address, Registers.A);
                                 yield return 1;
                                 break;
                             }
                         case 0x33:
                             yield return 1;
-                            register.stack_pointer++;
+                            Registers.stack_pointer++;
                             break;
                         case 0x34:
                             {
-                                byte read = bus.Read(register.HL);
+                                var b = device.bus.ReadByte(Registers.HL);
                                 yield return 1;
-                                Increment(ref read);
-                                bus.Write(register.HL, read);
+                                alu.Increment(ref b);
+                                device.bus.WriteByte(Registers.HL, b);
                                 yield return 1;
                                 break;
                             }
                         case 0x35:
                             {
-                                byte read = bus.Read(register.HL);
+                                var b = device.bus.ReadByte(Registers.HL);
                                 yield return 1;
-                                Decrement(ref read);
-                                bus.Write(register.HL, read);
+                                alu.Decrement(ref b);
+                                device.bus.WriteByte(Registers.HL, b);
                                 yield return 1;
                                 break;
                             }
                         case 0x36:
                             {
-                                byte read = Read();
+                                var b = Read();
                                 yield return 1;
-                                bus.Write(register.HL, read);
+                                device.bus.WriteByte(Registers.HL, b);
                                 yield return 1;
                                 break;
                             }
                         case 0x37:
-                            register.SetFlag(CpuFlag.CARRY_FLAG, true);
-                            register.SetFlag(CpuFlag.HALF_CARRY_FLAG | CpuFlag.SUBTRACT_FLAG, false);
+                            alu.SCF();
                             break;
                         case 0x38:
                             {
-                                sbyte distance = (sbyte)Read();
+                                var distance = (sbyte)Read();
                                 yield return 1;
-
-                                if (!register.GetFlag(CpuFlag.CARRY_FLAG))
+                                if (!Registers.GetFlag(CpuFlag.CARRY_FLAG))
                                 {
                                     break;
                                 }
 
                                 yield return 1;
-                                register.program_counter = (ushort)((register.program_counter + distance) & 0xFFFF);
+                                Registers.program_counter = (ushort)((Registers.program_counter + distance) & 0xFFFF);
                                 break;
                             }
                         case 0x39:
                             yield return 1;
-                            AddHL(register.stack_pointer);
+                            alu.AddHL(Registers.stack_pointer);
                             break;
                         case 0x3A:
                             {
-                                byte read = bus.Read(register.HLD());
+                                var b = device.bus.ReadByte(Registers.HLD());
                                 yield return 1;
-                                register.A = read;
+                                Registers.A = b;
                                 break;
                             }
                         case 0x3B:
                             yield return 1;
-                            register.stack_pointer--;
+                            --Registers.stack_pointer;
                             break;
                         case 0x3C:
-                            Increment(ref register.A);
+                            alu.Increment(ref Registers.A);
                             break;
                         case 0x3D:
-                            Decrement(ref register.A);
+                            alu.Decrement(ref Registers.A);
                             break;
                         case 0x3E:
                             {
-                                byte read = Read();
+                                var b = Read();
                                 yield return 1;
-                                register.A = read;
+                                Registers.A = b;
                                 break;
                             }
                         case 0x3F:
-                            register.SetFlag(CpuFlag.CARRY_FLAG, !register.GetFlag(CpuFlag.CARRY_FLAG));
-                            register.SetFlag(CpuFlag.HALF_CARRY_FLAG | CpuFlag.SUBTRACT_FLAG, false);
+                            alu.CCF();
                             break;
-                        case 0x40: // No OP
+                        case 0x40:
                             break;
                         case 0x41:
-                            register.B = register.C;
+                            Registers.B = Registers.C;
                             break;
                         case 0x42:
-                            register.B = register.D;
+                            Registers.B = Registers.D;
                             break;
                         case 0x43:
-                            register.B = register.E;
+                            Registers.B = Registers.E;
                             break;
                         case 0x44:
-                            register.B = register.H;
+                            Registers.B = Registers.H;
                             break;
                         case 0x45:
-                            register.B = register.L;
+                            Registers.B = Registers.L;
                             break;
                         case 0x46:
                             {
-                                byte read = bus.Read(register.HL);
+                                var b = device.bus.ReadByte(Registers.HL);
                                 yield return 1;
-                                register.B = read;
+                                Registers.B = b;
                                 break;
                             }
                         case 0x47:
-                            register.B = register.A;
+                            Registers.B = Registers.A;
                             break;
                         case 0x48:
-                            register.C = register.B;
+                            Registers.C = Registers.B;
                             break;
                         case 0x49:
                             break;
                         case 0x4A:
-                            register.C = register.D;
+                            Registers.C = Registers.D;
                             break;
                         case 0x4B:
-                            register.C = register.E;
+                            Registers.C = Registers.E;
                             break;
                         case 0x4C:
-                            register.C = register.H;
+                            Registers.C = Registers.H;
                             break;
                         case 0x4D:
-                            register.C = register.L;
+                            Registers.C = Registers.L;
                             break;
                         case 0x4E:
                             {
-                                byte read = bus.Read(register.HL);
+                                var b = device.bus.ReadByte(Registers.HL);
                                 yield return 1;
-                                register.C = read;
+                                Registers.C = b;
                                 break;
                             }
                         case 0x4F:
-                            register.C = register.A;
+                            Registers.C = Registers.A;
                             break;
                         case 0x50:
-                            register.D = register.B;
+                            Registers.D = Registers.B;
                             break;
                         case 0x51:
-                            register.D = register.C;
+                            Registers.D = Registers.C;
                             break;
                         case 0x52:
                             break;
                         case 0x53:
-                            register.D = register.E;
+                            Registers.D = Registers.E;
                             break;
                         case 0x54:
-                            register.D = register.H;
+                            Registers.D = Registers.H;
                             break;
                         case 0x55:
-                            register.D = register.L;
+                            Registers.D = Registers.L;
                             break;
                         case 0x56:
                             {
-                                byte read = bus.Read(register.HL);
+                                var b = device.bus.ReadByte(Registers.HL);
                                 yield return 1;
-                                register.D = read;
+                                Registers.D = b;
                                 break;
                             }
                         case 0x57:
-                            register.D = register.A;
+                            Registers.D = Registers.A;
                             break;
                         case 0x58:
-                            register.E = register.B;
+                            Registers.E = Registers.B;
                             break;
                         case 0x59:
-                            register.E = register.C;
+                            Registers.E = Registers.C;
                             break;
                         case 0x5A:
-                            register.E = register.D;
+                            Registers.E = Registers.D;
                             break;
                         case 0x5B:
                             break;
                         case 0x5C:
-                            register.E = register.H;
+                            Registers.E = Registers.H;
                             break;
                         case 0x5D:
-                            register.E = register.L;
+                            Registers.E = Registers.L;
                             break;
                         case 0x5E:
                             {
-                                byte read = bus.Read(register.HL);
+                                var b = device.bus.ReadByte(Registers.HL);
                                 yield return 1;
-                                register.E = read;
+                                Registers.E = b;
                                 break;
                             }
                         case 0x5F:
-                            register.E = register.A;
+                            Registers.E = Registers.A;
                             break;
                         case 0x60:
-                            register.H = register.B;
+                            Registers.H = Registers.B;
                             break;
                         case 0x61:
-                            register.H = register.C;
+                            Registers.H = Registers.C;
                             break;
                         case 0x62:
-                            register.H = register.D;
+                            Registers.H = Registers.D;
                             break;
                         case 0x63:
-                            register.H = register.E;
+                            Registers.H = Registers.E;
                             break;
                         case 0x64:
                             break;
                         case 0x65:
-                            register.H = register.L;
+                            Registers.H = Registers.L;
                             break;
                         case 0x66:
                             {
-                                byte read = bus.Read(register.HL);
+                                var b = device.bus.ReadByte(Registers.HL);
                                 yield return 1;
-                                register.H = read;
+                                Registers.H = b;
                                 break;
                             }
                         case 0x67:
-                            register.H = register.A;
+                            Registers.H = Registers.A;
                             break;
                         case 0x68:
-                            register.L = register.B;
+                            Registers.L = Registers.B;
                             break;
                         case 0x69:
-                            register.L = register.C;
+                            Registers.L = Registers.C;
                             break;
                         case 0x6A:
-                            register.L = register.D;
+                            Registers.L = Registers.D;
                             break;
                         case 0x6B:
-                            register.L = register.E;
+                            Registers.L = Registers.E;
                             break;
                         case 0x6C:
-                            register.L = register.H;
+                            Registers.L = Registers.H;
                             break;
                         case 0x6D:
                             break;
                         case 0x6E:
                             {
-                                byte read = bus.Read(register.HL);
+                                var b = device.bus.ReadByte(Registers.HL);
                                 yield return 1;
-                                register.L = read;
+                                Registers.L = b;
                                 break;
                             }
                         case 0x6F:
-                            register.L = register.A;
+                            Registers.L = Registers.A;
                             break;
                         case 0x70:
-                            bus.Write(register.HL, register.B);
+                            device.bus.WriteByte(Registers.HL, Registers.B);
                             yield return 1;
                             break;
                         case 0x71:
-                            bus.Write(register.HL, register.C);
+                            device.bus.WriteByte(Registers.HL, Registers.C);
                             yield return 1;
                             break;
                         case 0x72:
-                            bus.Write(register.HL, register.D);
+                            device.bus.WriteByte(Registers.HL, Registers.D);
                             yield return 1;
                             break;
                         case 0x73:
-                            bus.Write(register.HL, register.E);
+                            device.bus.WriteByte(Registers.HL, Registers.E);
                             yield return 1;
                             break;
                         case 0x74:
-                            bus.Write(register.HL, register.H);
+                            device.bus.WriteByte(Registers.HL, Registers.H);
                             yield return 1;
                             break;
                         case 0x75:
-                            bus.Write(register.HL, register.L);
+                            device.bus.WriteByte(Registers.HL, Registers.L);
                             yield return 1;
                             break;
                         case 0x76: // HALT
                             halted = true;
+                            halted_bug_state = false;
+
+                            if (!device.interrupt_registers.AreInterruptsEnabledGlobally &&
+                                (device.interrupt_registers.InterruptEnable & device.interrupt_registers.InterruptFlags & 0x1F) != 0)
+                            {
+                                halted_bug_state = true;
+                            }
                             break;
                         case 0x77:
-                            bus.Write(register.HL, register.A);
+                            device.bus.WriteByte(Registers.HL, Registers.A);
                             yield return 1;
                             break;
                         case 0x78:
-                            register.A = register.B;
+                            Registers.A = Registers.B;
                             break;
                         case 0x79:
-                            register.A = register.C;
+                            Registers.A = Registers.C;
                             break;
                         case 0x7A:
-                            register.A = register.D;
+                            Registers.A = Registers.D;
                             break;
                         case 0x7B:
-                            register.A = register.E;
+                            Registers.A = Registers.E;
                             break;
                         case 0x7C:
-                            register.A = register.H;
+                            Registers.A = Registers.H;
                             break;
                         case 0x7D:
-                            register.A = register.L;
+                            Registers.A = Registers.L;
                             break;
                         case 0x7E:
                             {
-                                byte read = bus.Read(register.HL);
+                                var b = device.bus.ReadByte(Registers.HL);
                                 yield return 1;
-                                register.A = read;
+                                Registers.A = b;
                                 break;
                             }
                         case 0x7F:
                             break;
                         case 0x80:
-                            Add(ref register.A, register.B, false);
+                            alu.Add(ref Registers.A, Registers.B, false);
                             break;
                         case 0x81:
-                            Add(ref register.A, register.C, false);
+                            alu.Add(ref Registers.A, Registers.C, false);
                             break;
                         case 0x82:
-                            Add(ref register.A, register.D, false);
+                            alu.Add(ref Registers.A, Registers.D, false);
                             break;
                         case 0x83:
-                            Add(ref register.A, register.E, false);
+                            alu.Add(ref Registers.A, Registers.E, false);
                             break;
                         case 0x84:
-                            Add(ref register.A, register.H, false);
+                            alu.Add(ref Registers.A, Registers.H, false);
                             break;
                         case 0x85:
-                            Add(ref register.A, register.L, false);
+                            alu.Add(ref Registers.A, Registers.L, false);
                             break;
                         case 0x86:
                             {
-                                byte read = bus.Read(register.HL);
+                                var b = device.bus.ReadByte(Registers.HL);
                                 yield return 1;
-                                Add(ref register.A, read, false);
+                                alu.Add(ref Registers.A, b, false);
                                 break;
                             }
                         case 0x87:
-                            Add(ref register.A, register.A, false);
+                            alu.Add(ref Registers.A, Registers.A, false);
                             break;
                         case 0x88:
-                            Add(ref register.A, register.B, true);
+                            alu.Add(ref Registers.A, Registers.B, true);
                             break;
                         case 0x89:
-                            Add(ref register.A, register.C, true);
+                            alu.Add(ref Registers.A, Registers.C, true);
                             break;
                         case 0x8A:
-                            Add(ref register.A, register.D, true);
+                            alu.Add(ref Registers.A, Registers.D, true);
                             break;
                         case 0x8B:
-                            Add(ref register.A, register.E, true);
+                            alu.Add(ref Registers.A, Registers.E, true);
                             break;
                         case 0x8C:
-                            Add(ref register.A, register.H, true);
+                            alu.Add(ref Registers.A, Registers.H, true);
                             break;
                         case 0x8D:
-                            Add(ref register.A, register.L, true);
+                            alu.Add(ref Registers.A, Registers.L, true);
                             break;
                         case 0x8E:
                             {
-                                byte read = bus.Read(register.HL);
+                                var b = device.bus.ReadByte(Registers.HL);
                                 yield return 1;
-                                Add(ref register.A, read, true);
+                                alu.Add(ref Registers.A, b, true);
                                 break;
                             }
                         case 0x8F:
-                            Add(ref register.A, register.A, true);
+                            alu.Add(ref Registers.A, Registers.A, true);
                             break;
                         case 0x90:
-                            Sub(ref register.A, register.B, false);
+                            alu.Sub(ref Registers.A, Registers.B, false);
                             break;
                         case 0x91:
-                            Sub(ref register.A, register.C, false);
+                            alu.Sub(ref Registers.A, Registers.C, false);
                             break;
                         case 0x92:
-                            Sub(ref register.A, register.D, false);
+                            alu.Sub(ref Registers.A, Registers.D, false);
                             break;
                         case 0x93:
-                            Sub(ref register.A, register.E, false);
+                            alu.Sub(ref Registers.A, Registers.E, false);
                             break;
                         case 0x94:
-                            Sub(ref register.A, register.H, false);
+                            alu.Sub(ref Registers.A, Registers.H, false);
                             break;
                         case 0x95:
-                            Sub(ref register.A, register.L, false);
+                            alu.Sub(ref Registers.A, Registers.L, false);
                             break;
                         case 0x96:
                             {
-                                byte read = bus.Read(register.HL);
+                                var b = device.bus.ReadByte(Registers.HL);
                                 yield return 1;
-                                Sub(ref register.A, read, false);
+                                alu.Sub(ref Registers.A, b, false);
                                 break;
                             }
                         case 0x97:
-                            Sub(ref register.A, register.A, false);
+                            alu.Sub(ref Registers.A, Registers.A, false);
                             break;
                         case 0x98:
-                            Sub(ref register.A, register.B, true);
+                            alu.Sub(ref Registers.A, Registers.B, true);
                             break;
                         case 0x99:
-                            Sub(ref register.A, register.C, true);
+                            alu.Sub(ref Registers.A, Registers.C, true);
                             break;
                         case 0x9A:
-                            Sub(ref register.A, register.D, true);
+                            alu.Sub(ref Registers.A, Registers.D, true);
                             break;
                         case 0x9B:
-                            Sub(ref register.A, register.E, true);
+                            alu.Sub(ref Registers.A, Registers.E, true);
                             break;
                         case 0x9C:
-                            Sub(ref register.A, register.H, true);
+                            alu.Sub(ref Registers.A, Registers.H, true);
                             break;
                         case 0x9D:
-                            Sub(ref register.A, register.L, true);
+                            alu.Sub(ref Registers.A, Registers.L, true);
                             break;
                         case 0x9E:
                             {
-                                byte read = bus.Read(register.HL);
+                                var b = device.bus.ReadByte(Registers.HL);
                                 yield return 1;
-                                Sub(ref register.A, read, true);
+                                alu.Sub(ref Registers.A, b, true);
                                 break;
                             }
                         case 0x9F:
-                            Sub(ref register.A, register.A, true);
+                            alu.Sub(ref Registers.A, Registers.A, true);
                             break;
                         case 0xA0:
-                            And(ref register.A, register.B);
+                            alu.And(ref Registers.A, Registers.B);
                             break;
                         case 0xA1:
-                            And(ref register.A, register.C);
+                            alu.And(ref Registers.A, Registers.C);
                             break;
                         case 0xA2:
-                            And(ref register.A, register.D);
+                            alu.And(ref Registers.A, Registers.D);
                             break;
                         case 0xA3:
-                            And(ref register.A, register.E);
+                            alu.And(ref Registers.A, Registers.E);
                             break;
                         case 0xA4:
-                            And(ref register.A, register.H);
+                            alu.And(ref Registers.A, Registers.H);
                             break;
                         case 0xA5:
-                            And(ref register.A, register.L);
+                            alu.And(ref Registers.A, Registers.L);
                             break;
                         case 0xA6:
                             {
-                                byte read = bus.Read(register.HL);
+                                var b = device.bus.ReadByte(Registers.HL);
                                 yield return 1;
-                                And(ref register.A, read);
+                                alu.And(ref Registers.A, b);
                                 break;
                             }
                         case 0xA7:
-                            And(ref register.A, register.A);
+                            alu.And(ref Registers.A, Registers.A);
                             break;
                         case 0xA8:
-                            Xor(ref register.A, register.B);
+                            alu.Xor(ref Registers.A, Registers.B);
                             break;
                         case 0xA9:
-                            Xor(ref register.A, register.C);
+                            alu.Xor(ref Registers.A, Registers.C);
                             break;
                         case 0xAA:
-                            Xor(ref register.A, register.D);
+                            alu.Xor(ref Registers.A, Registers.D);
                             break;
                         case 0xAB:
-                            Xor(ref register.A, register.E);
+                            alu.Xor(ref Registers.A, Registers.E);
                             break;
                         case 0xAC:
-                            Xor(ref register.A, register.H);
+                            alu.Xor(ref Registers.A, Registers.H);
                             break;
                         case 0xAD:
-                            Xor(ref register.A, register.L);
+                            alu.Xor(ref Registers.A, Registers.L);
                             break;
                         case 0xAE:
                             {
-                                byte read = bus.Read(register.HL);
+                                var b = device.bus.ReadByte(Registers.HL);
                                 yield return 1;
-                                Xor(ref register.A, read);
+                                alu.Xor(ref Registers.A, b);
                                 break;
                             }
                         case 0xAF:
-                            Xor(ref register.A, register.A);
+                            alu.Xor(ref Registers.A, Registers.A);
                             break;
                         case 0xB0:
-                            Or(ref register.A, register.B);
+                            alu.Or(ref Registers.A, Registers.B);
                             break;
                         case 0xB1:
-                            Or(ref register.A, register.C);
+                            alu.Or(ref Registers.A, Registers.C);
                             break;
                         case 0xB2:
-                            Or(ref register.A, register.D);
+                            alu.Or(ref Registers.A, Registers.D);
                             break;
                         case 0xB3:
-                            Or(ref register.A, register.E);
+                            alu.Or(ref Registers.A, Registers.E);
                             break;
                         case 0xB4:
-                            Or(ref register.A, register.H);
+                            alu.Or(ref Registers.A, Registers.H);
                             break;
                         case 0xB5:
-                            Or(ref register.A, register.L);
+                            alu.Or(ref Registers.A, Registers.L);
                             break;
                         case 0xB6:
                             {
-                                byte read = bus.Read(register.HL);
+                                var b = device.bus.ReadByte(Registers.HL);
                                 yield return 1;
-                                Or(ref register.A, read);
+                                alu.Or(ref Registers.A, b);
                                 break;
                             }
                         case 0xB7:
-                            Sub(ref register.A, register.A, false);
+                            alu.Or(ref Registers.A, Registers.A);
                             break;
                         case 0xB8:
-                            Sub(ref register.A, register.B, false);
+                            alu.Cp(Registers.A, Registers.B);
                             break;
                         case 0xB9:
-                            Sub(ref register.A, register.C, false);
+                            alu.Cp(Registers.A, Registers.C);
                             break;
                         case 0xBA:
-                            Sub(ref register.A, register.D, false);
+                            alu.Cp(Registers.A, Registers.D);
                             break;
                         case 0xBB:
-                            Sub(ref register.A, register.E, false);
+                            alu.Cp(Registers.A, Registers.E);
                             break;
                         case 0xBC:
-                            Sub(ref register.A, register.H, false);
+                            alu.Cp(Registers.A, Registers.H);
                             break;
                         case 0xBD:
-                            Sub(ref register.A, register.L, false);
+                            alu.Cp(Registers.A, Registers.L);
                             break;
                         case 0xBE:
                             {
-                                byte read = bus.Read(register.HL);
+                                var b = device.bus.ReadByte(Registers.HL);
                                 yield return 1;
-                                Sub(ref register.A, read, false);
+                                alu.Cp(Registers.A, b);
                                 break;
                             }
                         case 0xBF:
-                            Sub(ref register.A, register.A, false);
+                            alu.Cp(Registers.A, Registers.A);
                             break;
                         case 0xC0:
                             {
                                 yield return 1;
-
-                                if (register.GetFlag(CpuFlag.ZERO_FLAG))
+                                if (Registers.GetFlag(CpuFlag.ZERO_FLAG))
                                 {
                                     break;
                                 }
 
-                                byte first = bus.Read(register.stack_pointer++);
+                                var first = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
-                                byte second = bus.Read(register.stack_pointer++);
+                                var second = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
 
-                                register.program_counter = (ushort)(first | (second << 8));
+                                Registers.program_counter = (ushort)(first | (second << 8));
                                 yield return 1;
                                 break;
                             }
                         case 0xC1:
                             {
-                                byte first = bus.Read(register.stack_pointer++);
+                                var first = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
-                                byte second = bus.Read(register.stack_pointer++);
+                                var second = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
 
-                                register.BC = (ushort)(first | (second << 8));
+                                Registers.BC = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0xC2:
                             {
-                                byte first = Read();
+                                var first = Read();
                                 yield return 1;
-                                byte second = Read();
+                                var second = Read();
                                 yield return 1;
 
-                                if (register.GetFlag(CpuFlag.ZERO_FLAG))
+                                if (Registers.GetFlag(CpuFlag.ZERO_FLAG))
                                 {
                                     break;
                                 }
 
                                 yield return 1;
-                                register.program_counter = (ushort)(first | (second << 8));
+                                Registers.program_counter = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0xC3:
                             {
-                                byte first = Read();
+                                var first = Read();
                                 yield return 1;
-                                byte second = Read();
+                                var second = Read();
                                 yield return 1;
                                 yield return 1;
-                                register.program_counter = (ushort)(first | (second << 8));
+                                Registers.program_counter = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0xC4:
                             {
-                                byte first = Read();
+                                var first = Read();
                                 yield return 1;
-                                byte second = Read();
+                                var second = Read();
                                 yield return 1;
 
-                                if (register.GetFlag(CpuFlag.ZERO_FLAG))
+                                if (Registers.GetFlag(CpuFlag.ZERO_FLAG))
                                 {
                                     break;
                                 }
 
                                 yield return 1;
 
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter >> 8));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter >> 8));
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter & 0xFF));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter & 0xFF));
                                 yield return 1;
 
-                                register.program_counter = (ushort)(first | (second << 8));
+                                Registers.program_counter = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0xC5:
                             {
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, register.B);
+                                device.bus.WriteByte(--Registers.stack_pointer, Registers.B);
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, register.C);
+                                device.bus.WriteByte(--Registers.stack_pointer, Registers.C);
                                 yield return 1;
                                 break;
                             }
                         case 0xC6:
                             {
-                                byte read = Read();
+                                var b = Read();
                                 yield return 1;
-                                Add(ref register.A, read, false);
+                                alu.Add(ref Registers.A, b, false);
                                 break;
                             }
                         case 0xC7:
                             {
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter >> 8));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter >> 8));
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter & 0xFF));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter & 0xFF));
                                 yield return 1;
-                                register.program_counter = 0x00;
+                                Registers.program_counter = 0x00;
                                 break;
                             }
                         case 0xC8:
                             {
                                 yield return 1;
-                                if (!register.GetFlag(CpuFlag.ZERO_FLAG))
+                                if (!Registers.GetFlag(CpuFlag.ZERO_FLAG))
                                 {
                                     break;
                                 }
 
-                                byte first = bus.Read(register.stack_pointer++);
+                                var first = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
-                                byte second = bus.Read(register.stack_pointer++);
+                                var second = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
 
                                 yield return 1;
-                                register.program_counter = (ushort)(first | (second << 8));
+                                Registers.program_counter = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0xC9:
                             {
-                                byte first = bus.Read(register.stack_pointer++);
+                                var first = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
-                                byte second = bus.Read(register.stack_pointer++);
+                                var second = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
 
                                 yield return 1;
-                                register.program_counter = (ushort)(first | (second << 8));
+                                Registers.program_counter = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0xCA:
@@ -1252,13 +1041,13 @@ namespace gbemu.cpu
                                 var second = Read();
                                 yield return 1;
 
-                                if (!register.GetFlag(CpuFlag.ZERO_FLAG))
+                                if (!Registers.GetFlag(CpuFlag.ZERO_FLAG))
                                 {
                                     break;
                                 }
 
                                 yield return 1;
-                                register.program_counter = (ushort)(first | (second << 8));
+                                Registers.program_counter = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0xCB:
@@ -1269,1356 +1058,1350 @@ namespace gbemu.cpu
                                 switch (subcode)
                                 {
                                     case 0x00:
-                                        RotateLeftCarry(ref register.B);
+                                        alu.RotateLeftCarry(ref Registers.B);
                                         break;
                                     case 0x01:
-                                        RotateLeftCarry(ref register.C);
+                                        alu.RotateLeftCarry(ref Registers.C);
                                         break;
                                     case 0x02:
-                                        RotateLeftCarry(ref register.D);
+                                        alu.RotateLeftCarry(ref Registers.D);
                                         break;
                                     case 0x03:
-                                        RotateLeftCarry(ref register.E);
+                                        alu.RotateLeftCarry(ref Registers.E);
                                         break;
                                     case 0x04:
-                                        RotateLeftCarry(ref register.H);
+                                        alu.RotateLeftCarry(ref Registers.H);
                                         break;
                                     case 0x05:
-                                        RotateLeftCarry(ref register.L);
+                                        alu.RotateLeftCarry(ref Registers.L);
                                         break;
                                     case 0x06:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            RotateLeftCarry(ref read);
-                                            bus.Write(register.HL, read);
+                                            alu.RotateLeftCarry(ref b);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0x07:
-                                        RotateLeftCarry(ref register.A);
+                                        alu.RotateLeftCarry(ref Registers.A);
                                         break;
                                     case 0x08:
-                                        RotateRightCarry(ref register.B);
+                                        alu.RotateRightCarry(ref Registers.B);
                                         break;
                                     case 0x09:
-                                        RotateRightCarry(ref register.C);
+                                        alu.RotateRightCarry(ref Registers.C);
                                         break;
                                     case 0x0A:
-                                        RotateRightCarry(ref register.D);
+                                        alu.RotateRightCarry(ref Registers.D);
                                         break;
                                     case 0x0B:
-                                        RotateRightCarry(ref register.E);
+                                        alu.RotateRightCarry(ref Registers.E);
                                         break;
                                     case 0x0C:
-                                        RotateRightCarry(ref register.H);
+                                        alu.RotateRightCarry(ref Registers.H);
                                         break;
                                     case 0x0D:
-                                        RotateRightCarry(ref register.L);
+                                        alu.RotateRightCarry(ref Registers.L);
                                         break;
                                     case 0x0E:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            RotateRightCarry(ref read);
-                                            bus.Write(register.HL, read);
+                                            alu.RotateRightCarry(ref b);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0x0F:
-                                        RotateRightCarry(ref register.A);
+                                        alu.RotateRightCarry(ref Registers.A);
                                         break;
                                     case 0x10:
-                                        RotateLeft(ref register.B);
+                                        alu.RotateLeft(ref Registers.B);
                                         break;
                                     case 0x11:
-                                        RotateLeft(ref register.C);
+                                        alu.RotateLeft(ref Registers.C);
                                         break;
                                     case 0x12:
-                                        RotateLeft(ref register.D);
+                                        alu.RotateLeft(ref Registers.D);
                                         break;
                                     case 0x13:
-                                        RotateLeft(ref register.E);
+                                        alu.RotateLeft(ref Registers.E);
                                         break;
                                     case 0x14:
-                                        RotateLeft(ref register.H);
+                                        alu.RotateLeft(ref Registers.H);
                                         break;
                                     case 0x15:
-                                        RotateLeft(ref register.L);
+                                        alu.RotateLeft(ref Registers.L);
                                         break;
                                     case 0x16:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            RotateLeft(ref read);
-                                            bus.Write(register.HL, read);
+                                            alu.RotateLeft(ref b);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0x17:
-                                        RotateLeft(ref register.A);
+                                        alu.RotateLeft(ref Registers.A);
                                         break;
                                     case 0x18:
-                                        RotateRight(ref register.B);
+                                        alu.RotateRight(ref Registers.B);
                                         break;
                                     case 0x19:
-                                        RotateRight(ref register.C);
+                                        alu.RotateRight(ref Registers.C);
                                         break;
                                     case 0x1A:
-                                        RotateRight(ref register.D);
+                                        alu.RotateRight(ref Registers.D);
                                         break;
                                     case 0x1B:
-                                        RotateRight(ref register.E);
+                                        alu.RotateRight(ref Registers.E);
                                         break;
                                     case 0x1C:
-                                        RotateRight(ref register.H);
+                                        alu.RotateRight(ref Registers.H);
                                         break;
                                     case 0x1D:
-                                        RotateRight(ref register.L);
+                                        alu.RotateRight(ref Registers.L);
                                         break;
                                     case 0x1E:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            RotateRight(ref read);
-                                            bus.Write(register.HL, read);
+                                            alu.RotateRight(ref b);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0x1F:
-                                        RotateRight(ref register.A);
+                                        alu.RotateRight(ref Registers.A);
                                         break;
                                     case 0x20:
-                                        ShiftLeft(ref register.B);
+                                        alu.ShiftLeft(ref Registers.B);
                                         break;
                                     case 0x21:
-                                        ShiftLeft(ref register.C);
+                                        alu.ShiftLeft(ref Registers.C);
                                         break;
                                     case 0x22:
-                                        ShiftLeft(ref register.D);
+                                        alu.ShiftLeft(ref Registers.D);
                                         break;
                                     case 0x23:
-                                        ShiftLeft(ref register.E);
+                                        alu.ShiftLeft(ref Registers.E);
                                         break;
                                     case 0x24:
-                                        ShiftLeft(ref register.H);
+                                        alu.ShiftLeft(ref Registers.H);
                                         break;
                                     case 0x25:
-                                        ShiftLeft(ref register.L);
+                                        alu.ShiftLeft(ref Registers.L);
                                         break;
                                     case 0x26:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            ShiftLeft(ref read);
-                                            bus.Write(register.HL, read);
+                                            alu.ShiftLeft(ref b);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0x27:
-                                        ShiftLeft(ref register.A);
+                                        alu.ShiftLeft(ref Registers.A);
                                         break;
                                     case 0x28:
-                                        ShiftRightAdjust(ref register.B);
+                                        alu.ShiftRightAdjust(ref Registers.B);
                                         break;
                                     case 0x29:
-                                        ShiftRightAdjust(ref register.C);
+                                        alu.ShiftRightAdjust(ref Registers.C);
                                         break;
                                     case 0x2A:
-                                        ShiftRightAdjust(ref register.D);
+                                        alu.ShiftRightAdjust(ref Registers.D);
                                         break;
                                     case 0x2B:
-                                        ShiftRightAdjust(ref register.E);
+                                        alu.ShiftRightAdjust(ref Registers.E);
                                         break;
                                     case 0x2C:
-                                        ShiftRightAdjust(ref register.H);
+                                        alu.ShiftRightAdjust(ref Registers.H);
                                         break;
                                     case 0x2D:
-                                        ShiftRightAdjust(ref register.L);
+                                        alu.ShiftRightAdjust(ref Registers.L);
                                         break;
                                     case 0x2E:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            ShiftRightAdjust(ref read);
-                                            bus.Write(register.HL, read);
+                                            alu.ShiftRightAdjust(ref b);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0x2F:
-                                        ShiftRightAdjust(ref register.A);
+                                        alu.ShiftRightAdjust(ref Registers.A);
                                         break;
                                     case 0x30:
-                                        Swap(ref register.B);
+                                        alu.Swap(ref Registers.B);
                                         break;
                                     case 0x31:
-                                        Swap(ref register.C);
+                                        alu.Swap(ref Registers.C);
                                         break;
                                     case 0x32:
-                                        Swap(ref register.D);
+                                        alu.Swap(ref Registers.D);
                                         break;
                                     case 0x33:
-                                        Swap(ref register.E);
+                                        alu.Swap(ref Registers.E);
                                         break;
                                     case 0x34:
-                                        Swap(ref register.H);
+                                        alu.Swap(ref Registers.H);
                                         break;
                                     case 0x35:
-                                        Swap(ref register.L);
+                                        alu.Swap(ref Registers.L);
                                         break;
                                     case 0x36:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Swap(ref read);
-                                            bus.Write(register.HL, read);
+                                            alu.Swap(ref b);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0x37:
-                                        Swap(ref register.A);
+                                        alu.Swap(ref Registers.A);
                                         break;
                                     case 0x38:
-                                        ShiftRight(ref register.B);
+                                        alu.ShiftRight(ref Registers.B);
                                         break;
                                     case 0x39:
-                                        ShiftRight(ref register.C);
+                                        alu.ShiftRight(ref Registers.C);
                                         break;
                                     case 0x3A:
-                                        ShiftRight(ref register.D);
+                                        alu.ShiftRight(ref Registers.D);
                                         break;
                                     case 0x3B:
-                                        ShiftRight(ref register.E);
+                                        alu.ShiftRight(ref Registers.E);
                                         break;
                                     case 0x3C:
-                                        ShiftRight(ref register.H);
+                                        alu.ShiftRight(ref Registers.H);
                                         break;
                                     case 0x3D:
-                                        ShiftRight(ref register.L);
+                                        alu.ShiftRight(ref Registers.L);
                                         break;
                                     case 0x3E:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            ShiftRight(ref read);
-                                            bus.Write(register.HL, read);
+                                            alu.ShiftRight(ref b);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0x3F:
-                                        ShiftRight(ref register.A);
+                                        alu.ShiftRight(ref Registers.A);
                                         break;
                                     case 0x40:
-                                        Bit(register.B, 0);
+                                        alu.Bit(Registers.B, 0);
                                         break;
                                     case 0x41:
-                                        Bit(register.C, 0);
+                                        alu.Bit(Registers.C, 0);
                                         break;
                                     case 0x42:
-                                        Bit(register.D, 0);
+                                        alu.Bit(Registers.D, 0);
                                         break;
                                     case 0x43:
-                                        Bit(register.E, 0);
+                                        alu.Bit(Registers.E, 0);
                                         break;
                                     case 0x44:
-                                        Bit(register.H, 0);
+                                        alu.Bit(Registers.H, 0);
                                         break;
                                     case 0x45:
-                                        Bit(register.L, 0);
+                                        alu.Bit(Registers.L, 0);
                                         break;
                                     case 0x46:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Bit(read, 0);
+                                            alu.Bit(b, 0);
                                             break;
                                         }
                                     case 0x47:
-                                        Bit(register.A, 0);
+                                        alu.Bit(Registers.A, 0);
                                         break;
                                     case 0x48:
-                                        Bit(register.B, 1);
+                                        alu.Bit(Registers.B, 1);
                                         break;
                                     case 0x49:
-                                        Bit(register.C, 1);
+                                        alu.Bit(Registers.C, 1);
                                         break;
                                     case 0x4A:
-                                        Bit(register.D, 1);
+                                        alu.Bit(Registers.D, 1);
                                         break;
                                     case 0x4B:
-                                        Bit(register.E, 1);
+                                        alu.Bit(Registers.E, 1);
                                         break;
                                     case 0x4C:
-                                        Bit(register.H, 1);
+                                        alu.Bit(Registers.H, 1);
                                         break;
                                     case 0x4D:
-                                        Bit(register.L, 1);
+                                        alu.Bit(Registers.L, 1);
                                         break;
                                     case 0x4E:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Bit(read, 1);
+                                            alu.Bit(b, 1);
                                             break;
                                         }
                                     case 0x4F:
-                                        Bit(register.A, 1);
+                                        alu.Bit(Registers.A, 1);
                                         break;
                                     case 0x50:
-                                        Bit(register.B, 2);
+                                        alu.Bit(Registers.B, 2);
                                         break;
                                     case 0x51:
-                                        Bit(register.C, 2);
+                                        alu.Bit(Registers.C, 2);
                                         break;
                                     case 0x52:
-                                        Bit(register.D, 2);
+                                        alu.Bit(Registers.D, 2);
                                         break;
                                     case 0x53:
-                                        Bit(register.E, 2);
+                                        alu.Bit(Registers.E, 2);
                                         break;
                                     case 0x54:
-                                        Bit(register.H, 2);
+                                        alu.Bit(Registers.H, 2);
                                         break;
                                     case 0x55:
-                                        Bit(register.L, 2);
+                                        alu.Bit(Registers.L, 2);
                                         break;
                                     case 0x56:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Bit(read, 2);
+                                            alu.Bit(b, 2);
                                             break;
                                         }
                                     case 0x57:
-                                        Bit(register.A, 2);
+                                        alu.Bit(Registers.A, 2);
                                         break;
                                     case 0x58:
-                                        Bit(register.B, 3);
+                                        alu.Bit(Registers.B, 3);
                                         break;
                                     case 0x59:
-                                        Bit(register.C, 3);
+                                        alu.Bit(Registers.C, 3);
                                         break;
                                     case 0x5A:
-                                        Bit(register.D, 3);
+                                        alu.Bit(Registers.D, 3);
                                         break;
                                     case 0x5B:
-                                        Bit(register.E, 3);
+                                        alu.Bit(Registers.E, 3);
                                         break;
                                     case 0x5C:
-                                        Bit(register.H, 3);
+                                        alu.Bit(Registers.H, 3);
                                         break;
                                     case 0x5D:
-                                        Bit(register.L, 3);
+                                        alu.Bit(Registers.L, 3);
                                         break;
                                     case 0x5E:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Bit(read, 3);
+                                            alu.Bit(b, 3);
                                             break;
                                         }
                                     case 0x5F:
-                                        Bit(register.A, 3);
+                                        alu.Bit(Registers.A, 3);
                                         break;
                                     case 0x60:
-                                        Bit(register.B, 4);
+                                        alu.Bit(Registers.B, 4);
                                         break;
                                     case 0x61:
-                                        Bit(register.C, 4);
+                                        alu.Bit(Registers.C, 4);
                                         break;
                                     case 0x62:
-                                        Bit(register.D, 4);
+                                        alu.Bit(Registers.D, 4);
                                         break;
                                     case 0x63:
-                                        Bit(register.E, 4);
+                                        alu.Bit(Registers.E, 4);
                                         break;
                                     case 0x64:
-                                        Bit(register.H, 4);
+                                        alu.Bit(Registers.H, 4);
                                         break;
                                     case 0x65:
-                                        Bit(register.L, 4);
+                                        alu.Bit(Registers.L, 4);
                                         break;
                                     case 0x66:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Bit(read, 4);
+                                            alu.Bit(b, 4);
                                             break;
                                         }
                                     case 0x67:
-                                        Bit(register.A, 4);
+                                        alu.Bit(Registers.A, 4);
                                         break;
                                     case 0x68:
-                                        Bit(register.B, 5);
+                                        alu.Bit(Registers.B, 5);
                                         break;
                                     case 0x69:
-                                        Bit(register.C, 5);
+                                        alu.Bit(Registers.C, 5);
                                         break;
                                     case 0x6A:
-                                        Bit(register.D, 5);
+                                        alu.Bit(Registers.D, 5);
                                         break;
                                     case 0x6B:
-                                        Bit(register.E, 5);
+                                        alu.Bit(Registers.E, 5);
                                         break;
                                     case 0x6C:
-                                        Bit(register.H, 5);
+                                        alu.Bit(Registers.H, 5);
                                         break;
                                     case 0x6D:
-                                        Bit(register.L, 5);
+                                        alu.Bit(Registers.L, 5);
                                         break;
                                     case 0x6E:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Bit(read, 5);
+                                            alu.Bit(b, 5);
                                             break;
                                         }
                                     case 0x6F:
-                                        Bit(register.A, 5);
+                                        alu.Bit(Registers.A, 5);
                                         break;
                                     case 0x70:
-                                        Bit(register.B, 6);
+                                        alu.Bit(Registers.B, 6);
                                         break;
                                     case 0x71:
-                                        Bit(register.C, 6);
+                                        alu.Bit(Registers.C, 6);
                                         break;
                                     case 0x72:
-                                        Bit(register.D, 6);
+                                        alu.Bit(Registers.D, 6);
                                         break;
                                     case 0x73:
-                                        Bit(register.E, 6);
+                                        alu.Bit(Registers.E, 6);
                                         break;
                                     case 0x74:
-                                        Bit(register.H, 6);
+                                        alu.Bit(Registers.H, 6);
                                         break;
                                     case 0x75:
-                                        Bit(register.L, 6);
+                                        alu.Bit(Registers.L, 6);
                                         break;
                                     case 0x76:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Bit(read, 6);
+                                            alu.Bit(b, 6);
                                             break;
                                         }
                                     case 0x77:
-                                        Bit(register.A, 6);
+                                        alu.Bit(Registers.A, 6);
                                         break;
                                     case 0x78:
-                                        Bit(register.B, 7);
+                                        alu.Bit(Registers.B, 7);
                                         break;
                                     case 0x79:
-                                        Bit(register.C, 7);
+                                        alu.Bit(Registers.C, 7);
                                         break;
                                     case 0x7A:
-                                        Bit(register.D, 7);
+                                        alu.Bit(Registers.D, 7);
                                         break;
                                     case 0x7B:
-                                        Bit(register.E, 7);
+                                        alu.Bit(Registers.E, 7);
                                         break;
                                     case 0x7C:
-                                        Bit(register.H, 7);
+                                        alu.Bit(Registers.H, 7);
                                         break;
                                     case 0x7D:
-                                        Bit(register.L, 7);
+                                        alu.Bit(Registers.L, 7);
                                         break;
                                     case 0x7E:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Bit(read, 7);
+                                            alu.Bit(b, 7);
                                             break;
                                         }
                                     case 0x7F:
-                                        Bit(register.A, 7);
+                                        alu.Bit(Registers.A, 7);
                                         break;
                                     case 0x80:
-                                        Res(ref register.B, 0);
+                                        alu.Res(ref Registers.B, 0);
                                         break;
                                     case 0x81:
-                                        Res(ref register.C, 0);
+                                        alu.Res(ref Registers.C, 0);
                                         break;
                                     case 0x82:
-                                        Res(ref register.D, 0);
+                                        alu.Res(ref Registers.D, 0);
                                         break;
                                     case 0x83:
-                                        Res(ref register.E, 0);
+                                        alu.Res(ref Registers.E, 0);
                                         break;
                                     case 0x84:
-                                        Res(ref register.H, 0);
+                                        alu.Res(ref Registers.H, 0);
                                         break;
                                     case 0x85:
-                                        Res(ref register.L, 0);
+                                        alu.Res(ref Registers.L, 0);
                                         break;
                                     case 0x86:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Res(ref read, 0);
-                                            bus.Write(register.HL, read);
+                                            alu.Res(ref b, 0);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0x87:
-                                        Res(ref register.A, 0);
+                                        alu.Res(ref Registers.A, 0);
                                         break;
                                     case 0x88:
-                                        Res(ref register.B, 1);
+                                        alu.Res(ref Registers.B, 1);
                                         break;
                                     case 0x89:
-                                        Res(ref register.C, 1);
+                                        alu.Res(ref Registers.C, 1);
                                         break;
                                     case 0x8A:
-                                        Res(ref register.D, 1);
+                                        alu.Res(ref Registers.D, 1);
                                         break;
                                     case 0x8B:
-                                        Res(ref register.E, 1);
+                                        alu.Res(ref Registers.E, 1);
                                         break;
                                     case 0x8C:
-                                        Res(ref register.H, 1);
+                                        alu.Res(ref Registers.H, 1);
                                         break;
                                     case 0x8D:
-                                        Res(ref register.L, 1);
+                                        alu.Res(ref Registers.L, 1);
                                         break;
                                     case 0x8E:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Res(ref read, 1);
-                                            bus.Write(register.HL, read);
+                                            alu.Res(ref b, 1);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0x8F:
-                                        Res(ref register.A, 1);
+                                        alu.Res(ref Registers.A, 1);
                                         break;
                                     case 0x90:
-                                        Res(ref register.B, 2);
+                                        alu.Res(ref Registers.B, 2);
                                         break;
                                     case 0x91:
-                                        Res(ref register.C, 2);
+                                        alu.Res(ref Registers.C, 2);
                                         break;
                                     case 0x92:
-                                        Res(ref register.D, 2);
+                                        alu.Res(ref Registers.D, 2);
                                         break;
                                     case 0x93:
-                                        Res(ref register.E, 2);
+                                        alu.Res(ref Registers.E, 2);
                                         break;
                                     case 0x94:
-                                        Res(ref register.H, 2);
+                                        alu.Res(ref Registers.H, 2);
                                         break;
                                     case 0x95:
-                                        Res(ref register.L, 2);
+                                        alu.Res(ref Registers.L, 2);
                                         break;
                                     case 0x96:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Res(ref read, 2);
-                                            bus.Write(register.HL, read);
+                                            alu.Res(ref b, 2);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0x97:
-                                        Res(ref register.A, 2);
+                                        alu.Res(ref Registers.A, 2);
                                         break;
                                     case 0x98:
-                                        Res(ref register.B, 3);
+                                        alu.Res(ref Registers.B, 3);
                                         break;
                                     case 0x99:
-                                        Res(ref register.C, 3);
+                                        alu.Res(ref Registers.C, 3);
                                         break;
                                     case 0x9A:
-                                        Res(ref register.D, 3);
+                                        alu.Res(ref Registers.D, 3);
                                         break;
                                     case 0x9B:
-                                        Res(ref register.E, 3);
+                                        alu.Res(ref Registers.E, 3);
                                         break;
                                     case 0x9C:
-                                        Res(ref register.H, 3);
+                                        alu.Res(ref Registers.H, 3);
                                         break;
                                     case 0x9D:
-                                        Res(ref register.L, 3);
+                                        alu.Res(ref Registers.L, 3);
                                         break;
                                     case 0x9E:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Res(ref read, 3);
-                                            bus.Write(register.HL, read);
+                                            alu.Res(ref b, 3);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0x9F:
-                                        Res(ref register.A, 3);
+                                        alu.Res(ref Registers.A, 3);
                                         break;
                                     case 0xA0:
-                                        Res(ref register.B, 4);
+                                        alu.Res(ref Registers.B, 4);
                                         break;
                                     case 0xA1:
-                                        Res(ref register.C, 4);
+                                        alu.Res(ref Registers.C, 4);
                                         break;
                                     case 0xA2:
-                                        Res(ref register.D, 4);
+                                        alu.Res(ref Registers.D, 4);
                                         break;
                                     case 0xA3:
-                                        Res(ref register.E, 4);
+                                        alu.Res(ref Registers.E, 4);
                                         break;
                                     case 0xA4:
-                                        Res(ref register.H, 4);
+                                        alu.Res(ref Registers.H, 4);
                                         break;
                                     case 0xA5:
-                                        Res(ref register.L, 4);
+                                        alu.Res(ref Registers.L, 4);
                                         break;
                                     case 0xA6:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Res(ref read, 4);
-                                            bus.Write(register.HL, read);
+                                            alu.Res(ref b, 4);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0xA7:
-                                        Res(ref register.A, 4);
+                                        alu.Res(ref Registers.A, 4);
                                         break;
                                     case 0xA8:
-                                        Res(ref register.B, 5);
+                                        alu.Res(ref Registers.B, 5);
                                         break;
                                     case 0xA9:
-                                        Res(ref register.C, 5);
+                                        alu.Res(ref Registers.C, 5);
                                         break;
                                     case 0xAA:
-                                        Res(ref register.D, 5);
+                                        alu.Res(ref Registers.D, 5);
                                         break;
                                     case 0xAB:
-                                        Res(ref register.E, 5);
+                                        alu.Res(ref Registers.E, 5);
                                         break;
                                     case 0xAC:
-                                        Res(ref register.H, 5);
+                                        alu.Res(ref Registers.H, 5);
                                         break;
                                     case 0xAD:
-                                        Res(ref register.L, 5);
+                                        alu.Res(ref Registers.L, 5);
                                         break;
                                     case 0xAE:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Res(ref read, 5);
-                                            bus.Write(register.HL, read);
+                                            alu.Res(ref b, 5);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0xAF:
-                                        Res(ref register.A, 5);
+                                        alu.Res(ref Registers.A, 5);
                                         break;
                                     case 0xB0:
-                                        Res(ref register.B, 6);
+                                        alu.Res(ref Registers.B, 6);
                                         break;
                                     case 0xB1:
-                                        Res(ref register.C, 6);
+                                        alu.Res(ref Registers.C, 6);
                                         break;
                                     case 0xB2:
-                                        Res(ref register.D, 6);
+                                        alu.Res(ref Registers.D, 6);
                                         break;
                                     case 0xB3:
-                                        Res(ref register.E, 6);
+                                        alu.Res(ref Registers.E, 6);
                                         break;
                                     case 0xB4:
-                                        Res(ref register.H, 6);
+                                        alu.Res(ref Registers.H, 6);
                                         break;
                                     case 0xB5:
-                                        Res(ref register.L, 6);
+                                        alu.Res(ref Registers.L, 6);
                                         break;
                                     case 0xB6:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Res(ref read, 6);
-                                            bus.Write(register.HL, read);
+                                            alu.Res(ref b, 6);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0xB7:
-                                        Res(ref register.A, 6);
+                                        alu.Res(ref Registers.A, 6);
                                         break;
                                     case 0xB8:
-                                        Res(ref register.B, 7);
+                                        alu.Res(ref Registers.B, 7);
                                         break;
                                     case 0xB9:
-                                        Res(ref register.C, 7);
+                                        alu.Res(ref Registers.C, 7);
                                         break;
                                     case 0xBA:
-                                        Res(ref register.D, 7);
+                                        alu.Res(ref Registers.D, 7);
                                         break;
                                     case 0xBB:
-                                        Res(ref register.E, 7);
+                                        alu.Res(ref Registers.E, 7);
                                         break;
                                     case 0xBC:
-                                        Res(ref register.H, 7);
+                                        alu.Res(ref Registers.H, 7);
                                         break;
                                     case 0xBD:
-                                        Res(ref register.L, 7);
+                                        alu.Res(ref Registers.L, 7);
                                         break;
                                     case 0xBE:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Res(ref read, 7);
-                                            bus.Write(register.HL, read);
+                                            alu.Res(ref b, 7);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0xBF:
-                                        Res(ref register.A, 7);
+                                        alu.Res(ref Registers.A, 7);
                                         break;
                                     case 0xC0:
-                                        Set(ref register.B, 0);
+                                        alu.Set(ref Registers.B, 0);
                                         break;
                                     case 0xC1:
-                                        Set(ref register.C, 0);
+                                        alu.Set(ref Registers.C, 0);
                                         break;
                                     case 0xC2:
-                                        Set(ref register.D, 0);
+                                        alu.Set(ref Registers.D, 0);
                                         break;
                                     case 0xC3:
-                                        Set(ref register.E, 0);
+                                        alu.Set(ref Registers.E, 0);
                                         break;
                                     case 0xC4:
-                                        Set(ref register.H, 0);
+                                        alu.Set(ref Registers.H, 0);
                                         break;
                                     case 0xC5:
-                                        Set(ref register.L, 0);
+                                        alu.Set(ref Registers.L, 0);
                                         break;
                                     case 0xC6:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Set(ref read, 0);
-                                            bus.Write(register.HL, read);
+                                            alu.Set(ref b, 0);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0xC7:
-                                        Set(ref register.A, 0);
+                                        alu.Set(ref Registers.A, 0);
                                         break;
                                     case 0xC8:
-                                        Set(ref register.B, 1);
+                                        alu.Set(ref Registers.B, 1);
                                         break;
                                     case 0xC9:
-                                        Set(ref register.C, 1);
+                                        alu.Set(ref Registers.C, 1);
                                         break;
                                     case 0xCA:
-                                        Set(ref register.D, 1);
+                                        alu.Set(ref Registers.D, 1);
                                         break;
                                     case 0xCB:
-                                        Set(ref register.E, 1);
+                                        alu.Set(ref Registers.E, 1);
                                         break;
                                     case 0xCC:
-                                        Set(ref register.H, 1);
+                                        alu.Set(ref Registers.H, 1);
                                         break;
                                     case 0xCD:
-                                        Set(ref register.L, 1);
+                                        alu.Set(ref Registers.L, 1);
                                         break;
                                     case 0xCE:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Set(ref read, 1);
-                                            bus.Write(register.HL, read);
+                                            alu.Set(ref b, 1);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0xCF:
-                                        Set(ref register.A, 1);
+                                        alu.Set(ref Registers.A, 1);
                                         break;
                                     case 0xD0:
-                                        Set(ref register.B, 2);
+                                        alu.Set(ref Registers.B, 2);
                                         break;
                                     case 0xD1:
-                                        Set(ref register.C, 2);
+                                        alu.Set(ref Registers.C, 2);
                                         break;
                                     case 0xD2:
-                                        Set(ref register.D, 2);
+                                        alu.Set(ref Registers.D, 2);
                                         break;
                                     case 0xD3:
-                                        Set(ref register.E, 2);
+                                        alu.Set(ref Registers.E, 2);
                                         break;
                                     case 0xD4:
-                                        Set(ref register.H, 2);
+                                        alu.Set(ref Registers.H, 2);
                                         break;
                                     case 0xD5:
-                                        Set(ref register.L, 2);
+                                        alu.Set(ref Registers.L, 2);
                                         break;
                                     case 0xD6:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Set(ref read, 2);
-                                            bus.Write(register.HL, read);
+                                            alu.Set(ref b, 2);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0xD7:
-                                        Set(ref register.A, 2);
+                                        alu.Set(ref Registers.A, 2);
                                         break;
                                     case 0xD8:
-                                        Set(ref register.B, 3);
+                                        alu.Set(ref Registers.B, 3);
                                         break;
                                     case 0xD9:
-                                        Set(ref register.C, 3);
+                                        alu.Set(ref Registers.C, 3);
                                         break;
                                     case 0xDA:
-                                        Set(ref register.D, 3);
+                                        alu.Set(ref Registers.D, 3);
                                         break;
                                     case 0xDB:
-                                        Set(ref register.E, 3);
+                                        alu.Set(ref Registers.E, 3);
                                         break;
                                     case 0xDC:
-                                        Set(ref register.H, 3);
+                                        alu.Set(ref Registers.H, 3);
                                         break;
                                     case 0xDD:
-                                        Set(ref register.L, 3);
+                                        alu.Set(ref Registers.L, 3);
                                         break;
                                     case 0xDE:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Set(ref read, 3);
-                                            bus.Write(register.HL, read);
+                                            alu.Set(ref b, 3);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0xDF:
-                                        Set(ref register.A, 3);
+                                        alu.Set(ref Registers.A, 3);
                                         break;
                                     case 0xE0:
-                                        Set(ref register.B, 4);
+                                        alu.Set(ref Registers.B, 4);
                                         break;
                                     case 0xE1:
-                                        Set(ref register.C, 4);
+                                        alu.Set(ref Registers.C, 4);
                                         break;
                                     case 0xE2:
-                                        Set(ref register.D, 4);
+                                        alu.Set(ref Registers.D, 4);
                                         break;
                                     case 0xE3:
-                                        Set(ref register.E, 4);
+                                        alu.Set(ref Registers.E, 4);
                                         break;
                                     case 0xE4:
-                                        Set(ref register.H, 4);
+                                        alu.Set(ref Registers.H, 4);
                                         break;
                                     case 0xE5:
-                                        Set(ref register.L, 4);
+                                        alu.Set(ref Registers.L, 4);
                                         break;
                                     case 0xE6:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Set(ref read, 4);
-                                            bus.Write(register.HL, read);
+                                            alu.Set(ref b, 4);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0xE7:
-                                        Set(ref register.A, 4);
+                                        alu.Set(ref Registers.A, 4);
                                         break;
                                     case 0xE8:
-                                        Set(ref register.B, 5);
+                                        alu.Set(ref Registers.B, 5);
                                         break;
                                     case 0xE9:
-                                        Set(ref register.C, 5);
+                                        alu.Set(ref Registers.C, 5);
                                         break;
                                     case 0xEA:
-                                        Set(ref register.D, 5);
+                                        alu.Set(ref Registers.D, 5);
                                         break;
                                     case 0xEB:
-                                        Set(ref register.E, 5);
+                                        alu.Set(ref Registers.E, 5);
                                         break;
                                     case 0xEC:
-                                        Set(ref register.H, 5);
+                                        alu.Set(ref Registers.H, 5);
                                         break;
                                     case 0xED:
-                                        Set(ref register.L, 5);
+                                        alu.Set(ref Registers.L, 5);
                                         break;
                                     case 0xEE:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Set(ref read, 5);
-                                            bus.Write(register.HL, read);
+                                            alu.Set(ref b, 5);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0xEF:
-                                        Set(ref register.A, 5);
+                                        alu.Set(ref Registers.A, 5);
                                         break;
                                     case 0xF0:
-                                        Set(ref register.B, 6);
+                                        alu.Set(ref Registers.B, 6);
                                         break;
                                     case 0xF1:
-                                        Set(ref register.C, 6);
+                                        alu.Set(ref Registers.C, 6);
                                         break;
                                     case 0xF2:
-                                        Set(ref register.D, 6);
+                                        alu.Set(ref Registers.D, 6);
                                         break;
                                     case 0xF3:
-                                        Set(ref register.E, 6);
+                                        alu.Set(ref Registers.E, 6);
                                         break;
                                     case 0xF4:
-                                        Set(ref register.H, 6);
+                                        alu.Set(ref Registers.H, 6);
                                         break;
                                     case 0xF5:
-                                        Set(ref register.L, 6);
+                                        alu.Set(ref Registers.L, 6);
                                         break;
                                     case 0xF6:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Set(ref read, 6);
-                                            bus.Write(register.HL, read);
+                                            alu.Set(ref b, 6);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0xF7:
-                                        Set(ref register.A, 6);
+                                        alu.Set(ref Registers.A, 6);
                                         break;
                                     case 0xF8:
-                                        Set(ref register.B, 7);
+                                        alu.Set(ref Registers.B, 7);
                                         break;
                                     case 0xF9:
-                                        Set(ref register.C, 7);
+                                        alu.Set(ref Registers.C, 7);
                                         break;
                                     case 0xFA:
-                                        Set(ref register.D, 7);
+                                        alu.Set(ref Registers.D, 7);
                                         break;
                                     case 0xFB:
-                                        Set(ref register.E, 7);
+                                        alu.Set(ref Registers.E, 7);
                                         break;
                                     case 0xFC:
-                                        Set(ref register.H, 7);
+                                        alu.Set(ref Registers.H, 7);
                                         break;
                                     case 0xFD:
-                                        Set(ref register.L, 7);
+                                        alu.Set(ref Registers.L, 7);
                                         break;
                                     case 0xFE:
                                         {
-                                            byte read = bus.Read(register.HL);
+                                            var b = device.bus.ReadByte(Registers.HL);
                                             yield return 1;
-                                            Set(ref read, 7);
-                                            bus.Write(register.HL, read);
+                                            alu.Set(ref b, 7);
+                                            device.bus.WriteByte(Registers.HL, b);
                                             yield return 1;
                                             break;
                                         }
                                     case 0xFF:
-                                        Set(ref register.A, 7);
+                                        alu.Set(ref Registers.A, 7);
                                         break;
                                     default:
-                                        throw new NotSupportedException();
+                                        throw new ArgumentException();
                                 }
                                 break;
                             }
                         case 0xCC:
                             {
-                                byte first = Read();
+                                var first = Read();
                                 yield return 1;
-                                byte second = Read();
+                                var second = Read();
                                 yield return 1;
 
-                                if (!register.GetFlag(CpuFlag.ZERO_FLAG))
+                                if (!Registers.GetFlag(CpuFlag.ZERO_FLAG))
                                 {
                                     break;
                                 }
 
                                 yield return 1;
 
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter >> 8));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter >> 8));
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter & 0xFF));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter & 0xFF));
                                 yield return 1;
 
-                                register.program_counter = (ushort)(first | (second << 8));
+                                Registers.program_counter = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0xCD:
                             {
-                                byte first = Read();
+                                var first = Read();
                                 yield return 1;
-                                byte second = Read();
-                                yield return 1;
-
+                                var second = Read();
                                 yield return 1;
 
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter >> 8));
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter & 0xFF));
+
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter >> 8));
                                 yield return 1;
-                                register.program_counter = (ushort)(first | (second << 8));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter & 0xFF));
+                                yield return 1;
+                                Registers.program_counter = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0xCE:
                             {
-                                byte read = Read();
+                                var b = Read();
                                 yield return 1;
-                                Add(ref register.A, read, true);
+                                alu.Add(ref Registers.A, b, true);
                                 break;
                             }
                         case 0xCF:
                             {
                                 yield return 1;
 
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter >> 8));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter >> 8));
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter & 0xFF));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter & 0xFF));
                                 yield return 1;
 
-                                register.program_counter = 0x08;
+                                Registers.program_counter = 0x08;
                                 break;
                             }
                         case 0xD0:
                             {
                                 yield return 1;
-
-                                if (register.GetFlag(CpuFlag.CARRY_FLAG))
+                                if (Registers.GetFlag(CpuFlag.CARRY_FLAG))
                                 {
                                     break;
                                 }
 
-                                byte first = bus.Read(register.stack_pointer++);
+                                var first = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
-                                byte second = bus.Read(register.stack_pointer++);
+                                var second = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
 
                                 yield return 1;
-                                register.program_counter = (ushort)(first | (second << 8));
+                                Registers.program_counter = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0xD1:
                             {
-                                byte first = bus.Read(register.stack_pointer++);
+                                var first = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
-                                byte second = bus.Read(register.stack_pointer++);
+                                var second = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
 
-                                register.DE = (ushort)(first | (second << 8));
+                                Registers.DE = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0xD2:
                             {
-                                byte first = Read();
+                                var first = Read();
                                 yield return 1;
-                                byte second = Read();
+                                var second = Read();
                                 yield return 1;
 
-                                if (register.GetFlag(CpuFlag.CARRY_FLAG))
+                                if (Registers.GetFlag(CpuFlag.CARRY_FLAG))
                                 {
                                     break;
                                 }
 
                                 yield return 1;
-                                register.program_counter = (ushort)(first | (second << 8));
+                                Registers.program_counter = (ushort)(first | (second << 8));
                                 break;
                             }
-                        case 0xD3: // Unpredictable behavior
+                        case 0xD3:
                             break;
                         case 0xD4:
                             {
-                                byte first = Read();
+                                var first = Read();
                                 yield return 1;
-                                byte second = Read();
+                                var second = Read();
                                 yield return 1;
 
-                                if (register.GetFlag(CpuFlag.CARRY_FLAG))
+                                if (Registers.GetFlag(CpuFlag.CARRY_FLAG))
                                 {
                                     break;
                                 }
 
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter >> 8));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter >> 8));
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter & 0xFF));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter & 0xFF));
                                 yield return 1;
 
                                 yield return 1;
-                                register.program_counter = (ushort)(first | (second << 8));
+                                Registers.program_counter = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0xD5:
                             {
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, register.D);
+                                device.bus.WriteByte(--Registers.stack_pointer, Registers.D);
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, register.E);
+                                device.bus.WriteByte(--Registers.stack_pointer, Registers.E);
                                 yield return 1;
                                 break;
                             }
                         case 0xD6:
                             {
-                                var read = Read();
+                                var b = Read();
                                 yield return 1;
-                                Sub(ref register.A, read, false);
+                                alu.Sub(ref Registers.A, b, false);
                                 break;
                             }
                         case 0xD7:
                             {
                                 yield return 1;
 
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter >> 8));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter >> 8));
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter & 0xFF));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter & 0xFF));
                                 yield return 1;
 
-                                register.program_counter = 0x10;
+                                Registers.program_counter = 0x10;
                                 break;
                             }
                         case 0xD8:
                             {
                                 yield return 1;
-
-                                if (!register.GetFlag(CpuFlag.CARRY_FLAG))
+                                if (!Registers.GetFlag(CpuFlag.CARRY_FLAG))
                                 {
                                     break;
                                 }
 
-                                byte first = bus.Read(register.stack_pointer++);
+                                var first = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
-                                byte second = bus.Read(register.stack_pointer++);
+                                var second = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
 
                                 yield return 1;
-                                register.program_counter = (ushort)(first | (second << 8));
+                                Registers.program_counter = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0xD9:
                             {
-                                byte first = bus.Read(register.stack_pointer++);
+                                var first = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
-                                byte second = bus.Read(register.stack_pointer++);
+                                var second = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
 
                                 yield return 1;
-                                register.program_counter = (ushort)(first | (second << 8));
+                                Registers.program_counter = (ushort)(first | (second << 8));
+
+                                device.interrupt_registers.AreInterruptsEnabledGlobally = true;
                                 break;
                             }
                         case 0xDA:
                             {
-                                byte first = Read();
+                                var first = Read();
                                 yield return 1;
-                                byte second = Read();
+                                var second = Read();
                                 yield return 1;
 
-                                if (!register.GetFlag(CpuFlag.CARRY_FLAG))
+                                if (!Registers.GetFlag(CpuFlag.CARRY_FLAG))
                                 {
                                     break;
                                 }
 
                                 yield return 1;
-                                register.program_counter = (ushort)(first | (second << 8));
+                                Registers.program_counter = (ushort)(first | (second << 8));
                                 break;
                             }
-                        case 0xDB: // Unpredictable behavior
+                        case 0xDB:
                             break;
                         case 0xDC:
                             {
-                                byte first = Read();
+                                var first = Read();
                                 yield return 1;
-                                byte second = Read();
+                                var second = Read();
                                 yield return 1;
 
-                                if (!register.GetFlag(CpuFlag.CARRY_FLAG))
+                                if (!Registers.GetFlag(CpuFlag.CARRY_FLAG))
                                 {
                                     break;
                                 }
 
                                 yield return 1;
 
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter >> 8));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter >> 8));
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter & 0xFF));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter & 0xFF));
                                 yield return 1;
 
-                                register.program_counter = (ushort)(first | (second << 8));
+                                Registers.program_counter = (ushort)(first | (second << 8));
                                 break;
                             }
-                        case 0xDD: // Unpredictable behavior
+                        case 0xDD:
                             break;
                         case 0xDE:
                             {
-                                byte read = Read();
+                                var b = Read();
                                 yield return 1;
-                                Sub(ref register.A, read, true);
+                                alu.Sub(ref Registers.A, b, true);
                                 break;
                             }
                         case 0xDF:
                             {
                                 yield return 1;
 
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter >> 8));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter >> 8));
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter & 0xFF));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter & 0xFF));
                                 yield return 1;
 
-                                register.program_counter = 0x18;
+                                Registers.program_counter = 0x18;
                                 break;
                             }
                         case 0xE0:
                             {
-                                byte read = Read();
+                                var b = Read();
                                 yield return 1;
-                                bus.Write((ushort)(0xFF00 + read), register.A);
+                                device.bus.WriteByte((ushort)(0xFF00 + b), Registers.A);
                                 yield return 1;
                                 break;
                             }
                         case 0xE1:
                             {
-                                byte first = bus.Read(register.stack_pointer++);
+                                var first = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
-                                byte second = bus.Read(register.stack_pointer++);
+                                var second = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
 
-                                register.HL = (ushort)(first | (second << 8));
+                                Registers.HL = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0xE2:
-                            bus.Write((ushort)(0xFF00 + register.C), register.A);
+                            device.bus.WriteByte((ushort)(0xFF00 + Registers.C), Registers.A);
                             yield return 1;
                             break;
-                        case 0xE3: // Unpredictable behavior
-                        case 0xE4: // Unpredictable behavior
+                        case 0xE3:
+                        case 0xE4:
                             break;
                         case 0xE5:
                             {
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, register.H);
+                                device.bus.WriteByte(--Registers.stack_pointer, Registers.H);
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, register.L);
+                                device.bus.WriteByte(--Registers.stack_pointer, Registers.L);
                                 yield return 1;
                                 break;
                             }
                         case 0xE6:
                             {
-                                var read = Read();
+                                var b = Read();
                                 yield return 1;
-                                And(ref register.A, read);
+                                alu.And(ref Registers.A, b);
                                 break;
                             }
                         case 0xE7:
                             {
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter >> 8));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter >> 8));
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter & 0xFF));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter & 0xFF));
                                 yield return 1;
 
-                                register.program_counter = 0x20;
+                                Registers.program_counter = 0x20;
                                 break;
                             }
                         case 0xE8:
                             {
-                                sbyte read = (sbyte)Read();
+                                var b = (sbyte)Read();
                                 yield return 1;
                                 yield return 1;
                                 yield return 1;
-
-                                int result = register.stack_pointer + read;
-                                register.SetFlag(CpuFlag.SUBTRACT_FLAG | CpuFlag.ZERO_FLAG, false);
-                                register.SetFlag(CpuFlag.HALF_CARRY_FLAG, ((register.stack_pointer ^ read ^ (result & 0xffff)) & 0x10) == 0x10);
-                                register.SetFlag(CpuFlag.CARRY_FLAG, ((register.stack_pointer ^ read ^ (result & 0xffff)) & 0x100) == 0x100);
-                                register.stack_pointer = (ushort)result;
-
+                                alu.AddSP(b);
                                 break;
                             }
                         case 0xE9:
-                            register.program_counter = register.HL;
+                            Registers.program_counter = Registers.HL;
                             break;
                         case 0xEA:
                             {
-                                byte first = Read();
+                                var first = Read();
                                 yield return 1;
-                                byte second = Read();
+                                var second = Read();
                                 yield return 1;
 
-                                bus.Write((ushort)(first | (second << 8)), register.A);
+                                device.bus.WriteByte((ushort)(first | (second << 8)), Registers.A);
                                 yield return 1;
                                 break;
                             }
-                        case 0xEB: // Unpredictable behavior
-                        case 0xEC: // Unpredictable behavior
-                        case 0xED: // Unpredictable behavior
+                        case 0xEB:
+                        case 0xEC:
+                        case 0xED:
                             break;
                         case 0xEE:
                             {
-                                byte read = Read();
+                                var b = Read();
                                 yield return 1;
-                                Xor(ref register.A, read);
+                                alu.Xor(ref Registers.A, b);
                                 break;
                             }
                         case 0xEF:
                             {
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter >> 8));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter >> 8));
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter & 0xFF));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter & 0xFF));
                                 yield return 1;
 
-                                register.program_counter = 0x28;
+                                Registers.program_counter = 0x28;
                                 break;
                             }
                         case 0xF0:
                             {
-                                ushort address = (ushort)(0xFF00 + Read());
+                                var address = (ushort)(0xFF00 + Read());
                                 yield return 1;
-                                byte b = bus.Read(address);
+                                var b = device.bus.ReadByte(address);
                                 yield return 1;
-                                register.A = b;
+                                Registers.A = b;
                                 break;
                             }
                         case 0xF1:
                             {
-                                byte first = bus.Read(register.stack_pointer++);
+                                var first = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
-                                byte second = bus.Read(register.stack_pointer++);
+                                var second = device.bus.ReadByte(Registers.stack_pointer++);
                                 yield return 1;
 
-                                register.AF = (ushort)(first | (second << 8));
+                                Registers.AF = (ushort)(first | (second << 8));
                                 break;
                             }
                         case 0xF2:
                             {
-                                byte read = bus.Read((ushort)(0xFF00 + register.C));
+                                var b = device.bus.ReadByte((ushort)(0xFF00 + Registers.C));
                                 yield return 1;
-                                register.A = read;
+                                Registers.A = b;
                                 break;
                             }
                         case 0xF3:
-                            bus.InterruptsGloballyEnabled = false;
+                            device.interrupt_registers.AreInterruptsEnabledGlobally = false;
                             interrupt_cooldown = 0;
                             break;
-                        case 0xF4: // Unpredictable behavior
+                        case 0xF4:
                             break;
                         case 0xF5:
                             {
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, register.A);
+                                device.bus.WriteByte(--Registers.stack_pointer, Registers.A);
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, register.F);
+                                device.bus.WriteByte(--Registers.stack_pointer, Registers.F);
                                 yield return 1;
                                 break;
                             }
                         case 0xF6:
                             {
-                                var read = Read();
+                                var b = Read();
                                 yield return 1;
-                                Or(ref register.A, read);
+                                alu.Or(ref Registers.A, b);
                                 break;
                             }
                         case 0xF7:
                             {
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter >> 8));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter >> 8));
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter & 0xFF));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter & 0xFF));
                                 yield return 1;
 
-                                register.program_counter = 0x30;
+                                Registers.program_counter = 0x30;
                                 break;
                             }
                         case 0xF8:
@@ -2626,64 +2409,78 @@ namespace gbemu.cpu
                                 var distance = (sbyte)Read();
                                 yield return 1;
                                 yield return 1;
-
-                                int result = register.stack_pointer + distance;
-                                register.SetFlag(CpuFlag.SUBTRACT_FLAG | CpuFlag.ZERO_FLAG, false);
-                                register.SetFlag(CpuFlag.HALF_CARRY_FLAG, ((register.stack_pointer ^ distance ^ (result & 0xffff)) & 0x10) == 0x10);
-                                register.SetFlag(CpuFlag.CARRY_FLAG, ((register.stack_pointer ^ distance ^ (result & 0xffff)) & 0x100) == 0x100);
-                                register.HL = (ushort)result;
-
+                                alu.LoadHLSpPlusR8(distance);
                                 break;
                             }
                         case 0xF9:
                             yield return 1;
-                            register.stack_pointer = register.HL;
+                            Registers.stack_pointer = Registers.HL;
                             break;
                         case 0xFA:
                             {
-                                byte first = Read();
+                                var first = Read();
                                 yield return 1;
-                                byte second = Read();
+                                var second = Read();
                                 yield return 1;
-                                byte read = bus.Read((ushort)(first | (second << 8)));
+                                var b = device.bus.ReadByte((ushort)(first | (second << 8)));
                                 yield return 1;
-                                register.A = read;
+                                Registers.A = b;
                                 break;
                             }
                         case 0xFB:
                             if (interrupt_cooldown == 0)
+                            {
                                 interrupt_cooldown = 2;
+                            }
                             break;
-                        case 0xFC: // Unpredictable behavior
-                        case 0xFD: // Unpredictable behavior
+                        case 0xFC:
+                        case 0xFD:
                             break;
                         case 0xFE:
                             {
-                                var read = Read();
+                                var b = Read();
                                 yield return 1;
-                                Sub(ref register.A, read, false);
+                                alu.Cp(Registers.A, b);
                                 break;
                             }
                         case 0xFF:
                             {
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter >> 8));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter >> 8));
                                 yield return 1;
-                                bus.Write(--register.stack_pointer, (byte)(register.program_counter & 0xFF));
+                                device.bus.WriteByte(--Registers.stack_pointer, (byte)(Registers.program_counter & 0xFF));
                                 yield return 1;
 
-                                register.program_counter = 0x38;
+                                Registers.program_counter = 0x38;
                                 break;
                             }
                         default:
-                            throw new NotSupportedException();
+                            throw new ArgumentException();
                     }
-                }
 
-                processing = false;
-                yield return 1;
+                    processing_intruction = false;
+                    yield return 1;
+                }
             }
         }
-    }
 
+        internal void Reset()
+        {
+            Registers.Clear();
+            halted = false;
+            interrupt_cooldown = 0;
+        }
+
+        internal byte Read()
+        {
+            var b = device.bus.ReadByte(Registers.program_counter);
+            Registers.program_counter = (ushort)(Registers.program_counter + 1);
+            return b;
+        }
+
+        IEnumerator IEnumerable.GetEnumerator()
+        {
+            return GetEnumerator();
+        }
+    }
 }

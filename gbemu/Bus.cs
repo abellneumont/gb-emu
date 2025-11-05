@@ -1,290 +1,324 @@
-using gbemu.cartridge;
-using gbemu.cpu;
+﻿using System;
 using gbemu.ppu;
-using System;
 
 namespace gbemu
 {
-
     internal class Bus
     {
+        private const int WRAM_SIZE_DMG = 0x2000;
+        private const int WRAM_SIZE_CGB = 0x8000;
+        private const int HRAM_SIZE = 0x7F;
+        private readonly Device device;
+        private readonly byte[] rom;
+        private readonly byte[] wram;
+        private readonly byte[] hram = new byte[HRAM_SIZE];
+        private byte wram_bank = 1;
 
-        internal CPU cpu;
-        internal PPU ppu;
-        internal DMAController dma;
-        internal Memory memory;
-        internal Timer timer;
-        internal Cartridge cartridge;
-        internal Screen screen;
-
-        internal long cycles;
-        private byte interrupt_flags = 0xe0;
-        private bool disable_rom;
-
-        public Bus(Cartridge cartridge)
+        public Bus(byte[] rom, Device device)
         {
-            this.cartridge = cartridge;
-            this.cpu = new CPU(this);
-            this.ppu = new PPU(this);
-            this.dma = new DMAController(this);
-            this.memory = new Memory();
-            this.timer = new Timer(this);
-            this.screen = new Screen(4);
+            this.rom = rom;
+            this.device = device;
 
-            Init();
-        }
-
-        public void Init()
-        {
-            cpu.register.AF = 0x01b0;
-            cpu.register.BC = 0x0013;
-            cpu.register.DE = 0x00d8;
-            cpu.register.HL = 0x014d;
-            cpu.register.program_counter = 0x0100;
-            cpu.register.stack_pointer = 0xfffe;
-
-            Write(0xFF05, 0);
-            Write(0xFF06, 0);
-            Write(0xFF07, 0);
-            Write(0xFF40, 0x91);
-            Write(0xFF42, 0);
-            Write(0xFF43, 0);
-            Write(0xFF45, 0);
-            Write(0xFF47, 0xFC);
-            Write(0xFF48, 0xFF);
-            Write(0xFF49, 0xFF);
-            Write(0xFF4A, 0);
-            Write(0xFF4B, 0);
-            Write(0xFF50, 0x1); // Turn off boot ROM
-        }
-
-        internal bool InterruptsGloballyEnabled { get; set; }
-
-        internal byte InterruptFlags
-        {
-            get => interrupt_flags;
-            set => interrupt_flags = (byte)(0xe0 | value);
-        }
-
-        internal byte InterruptEnable { get; set; }
-
-        internal void RequestInterrupt(InterruptType type)
-        {
-            interrupt_flags = (byte)(interrupt_flags | type.Mask());
-        }
-
-        internal void ResetInterrupt(InterruptType type)
-        {
-            interrupt_flags = (byte)(interrupt_flags & ~type.Mask());
-        }
-
-        public byte Read(ushort address)
-        {
-            byte read = Read2(address);
-            Console.WriteLine("READ " + address + " - " + read);
-            return read;
-        }
-
-        public byte Read2(ushort address)
-        {
-            //Console.WriteLine("READ " + address);
-
-            if (address <= 0x7fff)
-                return cartridge.ReadRom(address);
-
-            if (address <= 0x9fff)
+            wram = device.device_mode switch
             {
-                if (ppu.register.StateMode == PPUState.TRANSFERRING_DATA)
-                    return 0xff;
+                DeviceType.DMG => new byte[WRAM_SIZE_DMG],
+                DeviceType.CGB => new byte[WRAM_SIZE_CGB],
+                _ => throw new ArgumentOutOfRangeException()
+            };
+        }
 
-                return ppu.ReadVRAM((ushort)(address - 0x8000));
-            }
-
-            if (address <= 0xbfff)
-                return cartridge.ReadRam(address);
-
-            if (address <= 0xdfff)
-                return memory.ReadWide((ushort)(address - 0xc000));
-
-            if (address <= 0xfdff)
-                return memory.ReadWide((ushort)(address - 0xc000 - 0x2000));
-
-            if (address <= 0xfe9f)
+        internal byte ReadByte(ushort address)
+        {
+            if (address <= 0xFF)
+                return device.control_registers.RomDisabledRegister == 0
+                    ? rom[address]
+                    : device.cartridge.ReadRom(address);
+            if (address <= 0x7FFF)
+                return device.cartridge.ReadRom(address);
+            if (address <= 0x9FFF)
             {
-                if (ppu.register.StateMode == PPUState.OAM_RAM_PERIOD || ppu.register.StateMode == PPUState.TRANSFERRING_DATA || dma.BlockOAM())
+                if (device.ppu_registers.StatMode == StateMode.TRANSFERRING_DATA)
                 {
-                    return 0xff;
+                    return 0xFF;
                 }
 
-                return ppu.ReadOAM((ushort)(address - 0xfe00));
+                return device.ppu.GetVRAMByte(address);
             }
+            if (address <= 0xBFFF)
+                return device.cartridge.ReadRam(address);
+            if (address <= 0xDFFF)
+                return ReadFromRam(address);
+            if (address <= 0xFDFF)
+                return ReadFromRam((ushort)(address - 0x2000));
+            if (address <= 0xFE9F)
+            {
+                if (device.ppu_registers.StatMode == StateMode.OAM_RAM_PERIOD || device.ppu_registers.StatMode == StateMode.TRANSFERRING_DATA || device.dma_controller.BlocksOAMRAM())
+                {
+                    return 0xFF;
+                }
 
-            if (address <= 0xfeff)
-                return 0xff;
+                return device.ppu.GetOAMByte(address);
+            }
+            if (address <= 0xFEFF)
+                return 0xFF;
+            if (address == 0xFF00)
+                return device.controller_handler.ControllerRegister;
+            if (address == 0xFF01)
+                return device.control_registers.SerialTransferData;
+            if (address == 0xFF02)
+                return device.control_registers.SerialTransferControl;
+            if (address == 0xFF03)
+                return 0xFF;
+            if (address == 0xFF04)
+                return device.timer.Divider;
+            if (address == 0xFF05)
+                return device.timer.TimerCounter;
+            if (address == 0xFF06)
+                return device.timer.TimerModulo;
+            if (address == 0xFF07)
+                return device.timer.TimerController;
+            if (address >= 0xFF08 && address <= 0xFF0E)
+                return 0xFF;
+            if (address == 0xFF0F)
+                return device.interrupt_registers.InterruptFlags;
+            if (address >= 0xFF10 && address <= 0xFF3F)
+                return 0xFF;
+            if (address == 0xFF40)
+                return device.ppu_registers.LCDControlRegister;
+            if (address == 0xFF41)
+                return device.ppu_registers.StatRegister;
+            if (address == 0xFF42)
+                return device.ppu_registers.ScrollY;
+            if (address == 0xFF43)
+                return device.ppu_registers.ScrollX;
+            if (address == 0xFF44)
+                return device.ppu_registers.LYRegister;
+            if (address == 0xFF45)
+                return device.ppu_registers.LYCompare;
+            if (address == 0xFF46)
+                return device.dma_controller.DMA;
+            if (address == 0xFF47)
+                return device.ppu_registers.BackgroundPaletteData;
+            if (address == 0xFF48)
+                return device.ppu_registers.ObjectPaletteData0;
+            if (address == 0xFF49)
+                return device.ppu_registers.ObjectPaletteData1;
+            if (address == 0xFF4A)
+                return device.ppu_registers.WindowY;
+            if (address == 0xFF4B)
+                return device.ppu_registers.WindowX;
+            if (address == 0xFF4C)
+                return 0xFF;
+            if (address == 0xFF4D)
+                return 0xFF;
+            if (address == 0xFF4E)
+                return 0xFF;
+            if (address == 0xFF4F)
+                return 0xFF;
+            if (address == 0xFF50)
+                return device.control_registers.RomDisabledRegister;
+            if (address == 0xFF51)
+                return 0xFF;
+            if (address == 0xFF52)
+                return 0xFF;
+            if (address == 0xFF53)
+                return 0xFF;
+            if (address == 0xFF54)
+                return 0xFF;
+            if (address == 0xFF55)
+                return 0xFF;
+            if (address == 0xFF56)
+                return 0xFF;
+            if (address >= 0xFF57 && address <= 0xFF67)
+                return 0xFF;
+            if (address == 0xFF68)
+                return 0xFF;
+            if (address == 0xFF69)
+                return 0xFF;
+            if (address == 0xFF6A)
+                return 0xFF;
+            if (address == 0xFF6B)
+                return 0xFF;
+            if (address == 0xFF6C)
+                return 0xFF;
+            if (address >= 0xFF6D && address <= 0xFF6F)
+                return 0xFF;
+            if (address == 0xFF70)
+                return 0xFF;
+            if (address == 0xFF71)
+                return 0xFF;
+            if (address == 0xFF72)
+                return 0xFF;
+            if (address == 0xFF73)
+                return 0xFF;
+            if (address == 0xFF74)
+                return 0xFF;
+            if (address == 0xFF75)
+                return 0xFF;
+            if (address == 0xFF76)
+                return 0xFF;
+            if (address == 0xFF77)
+                return 0xFF;
+            if (address >= 0xFF78 && address <= 0xFF7F)
+                return 0xFF;
+            if (address >= 0xFF80 && address <= 0xFFFE)
+                return hram[address - 0xFF80];
+            if (address == 0xFFFF)
+                return device.interrupt_registers.InterruptEnable;
 
-            if (address <= 0xff00)
-                return 0x00; // Player Controller
-
-            if (address <= 0xff01)
-                return 0xff; // SB register
-
-            if (address <= 0xff02)
-                return 0xff; // SC register
-
-            if (address <= 0xff03)
-                return 0xff;
-
-            if (address <= 0xff04)
-                return timer.Divider;
-
-            if (address <= 0xff05)
-                return timer.TimerCounter;
-
-            if (address <= 0xff06)
-                return timer.TimerModulo;
-
-            if (address <= 0xff07)
-                return timer.TimerController;
-
-            if (address <= 0xff0e)
-                return 0xff;
-
-            if (address <= 0xff0f)
-                return InterruptFlags;
-
-            if (address <= 0xff3f) // APU
-                return 0xff;
-
-            if (address <= 0xff40)
-                return ppu.register.LCDControl;
-
-            if (address <= 0xff41)
-                return ppu.register.StateRegister;
-
-            if (address <= 0xff42)
-                return ppu.register.ScrollY;
-
-            if (address <= 0xff43)
-                return ppu.register.ScrollX;
-
-            if (address <= 0xff44)
-                return ppu.register.LYRegister;
-
-            if (address <= 0xff45)
-                return ppu.register.LYCompare;
-
-            if (address <= 0xff46)
-                return dma.DMA;
-
-            if (address <= 0xff47)
-                return ppu.register.BackgroundPalette;
-
-            if (address <= 0xff48)
-                return ppu.register.PaletteData[0];
-
-            if (address <= 0xff49)
-                return ppu.register.PaletteData[1];
-
-            if (address <= 0xff4a)
-                return ppu.register.WindowY;
-
-            if (address <= 0xff4b)
-                return ppu.register.WindowX;
-
-            if (address == 0xff50)
-                return (byte)(disable_rom ? 0xff : 0x0);
-
-            if (address <= 0xfffd)
-                return 0xff;
-
-            if (address <= 0xfffe)
-                return memory.Read((ushort)(address - 0xff80));
-
-            if (address == 0xffff)
-                return InterruptEnable;
-
-            return 0xff;
+            throw new ArgumentOutOfRangeException();
         }
 
-        public void Write(ushort address, byte value)
+        internal ushort ReadWord(ushort address) =>
+            (ushort)(ReadByte(address) | (ReadByte((ushort)((address + 1) & 0xFFFF)) << 8));
+
+        internal int WriteByte(ushort address, byte value)
         {
-            if (address <= 0x7fff)
-                cartridge.WriteRom(address, value);
-            else if (address <= 0x9fff)
+            if (address <= 0x7FFF)
+                device.cartridge.WriteRom(address, value);
+            else if (address >= 0x8000 && address <= 0x9FFF)
             {
-                if (!ppu.register.LcdOn || ppu.register.StateMode != PPUState.TRANSFERRING_DATA)
-                    ppu.WriteVRAM((ushort)(address - 0x8000), value);
+                if (!device.ppu_registers.IsLcdOn || device.ppu_registers.StatMode != StateMode.TRANSFERRING_DATA)
+                {
+                    device.ppu.WriteVRAMByte(address, value);
+                }
             }
-            else if (address <= 0xbfff)
-                cartridge.WriteRam(address, value);
-            else if (address <= 0xdfff)
-                memory.WriteWide((ushort)(address - 0xc000), value);
-            else if (address <= 0xfdff)
-                memory.WriteWide((ushort)(address - 0xc000 - 0x2000), value);
-            else if (address <= 0xfe9f)
+            else if (address >= 0xA000 && address <= 0xBFFF)
+                device.cartridge.WriteRam(address, value);
+            else if (address >= 0xC000 && address <= 0xDFFF)
+                WriteToRam(address, value);
+            else if (address >= 0xE000 && address <= 0xFDFF)
+                WriteToRam((ushort)(address - 0x2000), value);
+            else if (address >= 0xFE00 && address <= 0xFE9F)
             {
-                if ((!ppu.register.LcdOn || ppu.register.StateMode == PPUState.H_BLANK_PERIOD || ppu.register.StateMode == PPUState.V_BLANK_PERIOD) && !dma.BlockOAM())
-                    ppu.WriteOAM((ushort)(address - 0xFE00), value);
+                if ((!device.ppu_registers.IsLcdOn ||
+                     device.ppu_registers.StatMode == StateMode.H_BLANK_PERIOD ||
+                     device.ppu_registers.StatMode == StateMode.V_BLANK_PERIOD) && !device.dma_controller.BlocksOAMRAM())
+                {
+                    device.ppu.WriteOAMByte(address, value);
+                }
             }
-            else if (address <= 0xfeff)
-                return;
-            else if (address == 0xff00)
-                return; // TODO: Player Controller
-            else if (address <= 0xff03)
-                return;
-            else if (address == 0xff04)
-                timer.Divider = value;
-            else if (address == 0xff05)
-                timer.TimerCounter = value;
-            else if (address == 0xff06)
-                timer.TimerModulo = value;
-            else if (address == 0xff07)
-                timer.TimerController = value;
-            else if (address <= 0xff0e)
-                return;
-            else if (address == 0xff0f)
-                InterruptFlags = value;
-            else if (address == 0xff3f)
-                return; // TODO: APU
-            else if (address == 0xff40)
-                ppu.register.LCDControl = value;
-            else if (address == 0xff41)
-                ppu.register.StateRegister = value;
-            else if (address == 0xff42)
-                ppu.register.ScrollY = value;
-            else if (address == 0xff43)
-                ppu.register.ScrollX = value;
-            else if (address == 0xff44)
-                return; // Ignore write to LY
-            else if (address == 0xff45)
-                ppu.register.LYCompare = value;
-            else if (address == 0xff46)
-                dma.DMA = value;
-            else if (address == 0xff47)
-                ppu.register.BackgroundPalette = value;
-            else if (address == 0xff48)
-                ppu.register.PaletteData[0] = value;
-            else if (address == 0xff49)
-                ppu.register.PaletteData[1] = value;
-            else if (address == 0xff4a)
-                ppu.register.WindowY = value;
-            else if (address == 0xff4b)
-                ppu.register.WindowX = value;
-            else if (address == 0xff4f)
-                return;
-            else if (address == 0xff50)
+            else if (address >= 0xFEA0 && address <= 0xFEFF) { }
+            else if (address == 0xFF00)
+                device.controller_handler.ControllerRegister = value;
+            else if (address == 0xFF01)
             {
-                if (!disable_rom)
-                    disable_rom = value == 0x1;
+                if (device.control_registers.SerialTransferControl == 0x81)
+                {
+                    Console.Write(Convert.ToChar(value));
+                    device.control_registers.SerialTransferData = value;
+                }
             }
-            else if (address <= 0xff7f)
-                return;
-            else if (address <= 0xfffe)
-                memory.Write((ushort)(address - 0xff80), value);
-            else if (address <= 0xffff)
-                InterruptEnable = value;
+            else if (address == 0xFF02)
+                device.control_registers.SerialTransferControl = value;
+            else if (address == 0xFF03) { }
+            else if (address == 0xFF04)
+                device.timer.Divider = value;
+            else if (address == 0xFF05)
+                device.timer.TimerCounter = value;
+            else if (address == 0xFF06)
+                device.timer.TimerModulo = value;
+            else if (address == 0xFF07)
+                device.timer.TimerController = value;
+            else if (address >= 0xFF08 && address <= 0xFF0E) { }
+            else if (address == 0xFF0F)
+                device.interrupt_registers.InterruptFlags = value;
+            else if (address >= 0xFF10 && address <= 0xFF3F) { }
+            else if (address == 0xFF40)
+                device.ppu_registers.LCDControlRegister = value;
+            else if (address == 0xFF41)
+                device.ppu_registers.StatRegister = value;
+            else if (address == 0xFF42)
+                device.ppu_registers.ScrollY = value;
+            else if (address == 0xFF43)
+                device.ppu_registers.ScrollX = value;
+            else if (address == 0xFF44) { }
+            else if (address == 0xFF45)
+                device.ppu_registers.LYCompare = value;
+            else if (address == 0xFF46)
+                device.dma_controller.DMA = value;
+            else if (address == 0xFF47)
+                device.ppu_registers.BackgroundPaletteData = value;
+            else if (address == 0xFF48)
+                device.ppu_registers.ObjectPaletteData0 = value;
+            else if (address == 0xFF49)
+                device.ppu_registers.ObjectPaletteData1 = value;
+            else if (address == 0xFF4A)
+                device.ppu_registers.WindowY = value;
+            else if (address == 0xFF4B)
+                device.ppu_registers.WindowX = value;
+            else if (address == 0xFF4D)
+                device.control_registers.SpeedSwitchRequested = (value & 0x1) == 0x1;
+            else if (address >= 0xFF4C && address <= 0xFF4E) { }
+            else if (address == 0xFF4F)
+                device.ppu.SetVRAMBankRegister(value);
+            else if (address == 0xFF50)
+                device.control_registers.RomDisabledRegister = value;
+            else if (address == 0xFF51) { }
+            else if (address == 0xFF52) { }
+            else if (address == 0xFF53) { }
+            else if (address == 0xFF54) { }
+            else if (address == 0xFF55) { }
+            else if (address == 0xFF56) { }
+            else if (address >= 0xFF57 && address <= 0xFF67) { }
+            else if (address == 0xFF68) { }
+            else if (address == 0xFF69) { }
+            else if (address == 0xFF6A) { }
+            else if (address == 0xFF6B) { }
+            else if (address == 0xFF6C) { }
+            else if (address >= 0xFF6D && address <= 0xFF6F) { }
+            else if (address == 0xFF70)
+            {
+                wram_bank = (byte)(value & 0x7);
+                if (wram_bank == 0) wram_bank = 1;
+            }
+            else if (address == 0xFF71) { }
+            else if (address == 0xFF72)
+                device.control_registers.FF72 = value;
+            else if (address == 0xFF73)
+                device.control_registers.FF73 = value;
+            else if (address == 0xFF74) { }
+            else if (address == 0xFF75)
+                device.control_registers.FF75 = value;
+            else if (address == 0xFF76) { }
+            else if (address == 0xFF77) { }
+            else if (address >= 0xFF78 && address <= 0xFF7F) { }
+            else if (address >= 0xFF80 && address <= 0xFFFE)
+                hram[address - 0xFF80] = value;
+            else if (address == 0xFFFF)
+                device.interrupt_registers.InterruptEnable = value;
+            else
+                throw new ArgumentOutOfRangeException();
+
+            return 8;
         }
 
-    }
+        internal int WriteWord(ushort address, ushort value)
+        {
+            return
+                WriteByte(address, (byte)(value & 0xFF)) +
+                WriteByte((ushort)((address + 1) & 0xFFFF), (byte)(value >> 8));
+        }
 
+        private void WriteToRam(ushort address, byte value)
+        {
+            if (device.device_mode == DeviceType.DMG || address < 0xD000)
+            {
+                wram[address - 0xC000] = value;
+                return;
+            }
+
+            wram[address - 0xD000 + wram_bank * 0x1000] = value;
+        }
+
+        private byte ReadFromRam(ushort address)
+        {
+            if (device.device_mode == DeviceType.DMG || address < 0xD000)
+            {
+                return wram[address - 0xC000];
+            }
+
+            return wram[address - 0xD000 + wram_bank * 0x1000];
+        }
+    }
 }

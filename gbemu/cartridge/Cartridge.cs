@@ -1,95 +1,106 @@
-using System;
-using System.IO;
-using System.Linq;
+﻿using System.Linq;
+using System.Text;
 
 namespace gbemu.cartridge
 {
-
     public abstract class Cartridge
     {
-
-        public static Cartridge Create(byte[] data)
-        {
-            if (data.Length < 0x150)
-                throw new InvalidDataException();
-
-            return (CartridgeType) data[0x147] switch
-            {
-                CartridgeType.ROM => new RomCartridge(data),
-                CartridgeType.MBC1 => new MBC1Cartridge(data),
-                CartridgeType.MBC1_RAM => new MBC1Cartridge(data),
-                CartridgeType.MBC1_RAM_BATTERY => new MBC1Cartridge(data),
-                CartridgeType.MBC2 => new MBC2Cartridge(data),
-                CartridgeType.MBC2_BATTERY => new MBC2Cartridge(data),
-                CartridgeType.ROM_RAM => throw new NotSupportedException(),
-                CartridgeType.ROM_RAM_BATTERY => throw new NotSupportedException(),
-                CartridgeType.MMM01 => throw new NotSupportedException(),
-                CartridgeType.MMM01_RAM => throw new NotSupportedException(),
-                CartridgeType.MMM01_RAM_BATTERY => throw new NotSupportedException(),
-                CartridgeType.MBC3_TIMER_BATTERY => new MBC3Cartridge(data),
-                CartridgeType.MBC3_TIMER_RAM_BATTERY => new MBC3Cartridge(data),
-                CartridgeType.MBC3 => new MBC3Cartridge(data),
-                CartridgeType.MBC3_RAM => new MBC3Cartridge(data),
-                CartridgeType.MBC3_RAM_BATTERY => new MBC3Cartridge(data),
-                CartridgeType.MBC5 => new MBC5Cartridge(data),
-                CartridgeType.MBC5_RAM => new MBC5Cartridge(data),
-                CartridgeType.MBC5_RAM_BATTERY => new MBC5Cartridge(data),
-                CartridgeType.MBC5_RUMBLE => new MBC5Cartridge(data),
-                CartridgeType.MBC5_RUMBLE_RAM => new MBC5Cartridge(data),
-                CartridgeType.MBC5_RUMBLE_RAM_BATTERY => new MBC5Cartridge(data),
-                CartridgeType.MBC6 => throw new NotSupportedException(),
-                CartridgeType.MBC7_SENSOR_RUMBLE_RAM_BATTERY => throw new NotSupportedException(),
-                CartridgeType.POCKET_CAMERA => throw new NotSupportedException(),
-                CartridgeType.BANDAI_TAMA5 => throw new NotSupportedException(),
-                CartridgeType.HUC3 => throw new NotSupportedException(),
-                CartridgeType.HUC1_RAM_BATTERY => throw new NotSupportedException(),
-                _ => throw new InvalidDataException()
-            };
-        }
-
-        public const int ROM_BANK_SIZE = 0x4000;
-        public const int RAM_ADDRESS_START = 0xa000;
-
-        protected readonly byte[] data;
-        protected byte[] ram;
+        protected const int ROM_BANK_SIZE = 0x4000;
+        protected const int RAM_ADDRESS_START = 0xA000;
 
         protected bool ram_enabled;
-        protected int rom_bank = 1, ram_bank = 0;
+
+        protected int ram_bank;
+        protected int rom_bank;
+
+        protected readonly byte[] rom;
+        protected byte[] ram;
 
         internal Cartridge(byte[] data)
         {
-            this.data = data;
-            this.ram = new byte[RAM_TYPE.NumBanks() * CartridgeRam.BANK_SIZE];
-            this.ram_enabled = false;
+            rom = data;
+            ram = new byte[RAMSize.NumberBanks() * RAMSize.BankSizeBytes()];
+            ram_bank = 0x0;
+            rom_bank = 0x1;
+            ram_enabled = false;
         }
 
-        public CartridgeType CARTRIDGE_TYPE => (CartridgeType) data[0x147];
+        internal virtual byte ReadRom(ushort address)
+        {
+            if (address < ROM_BANK_SIZE)
+            {
+                return rom[address % rom.Length];
+            }
 
-        public CartridgeRomType ROM_TYPE => (CartridgeRomType) data[0x148];
+            if (address < ROM_BANK_SIZE * 2)
+            {
+                var bankAddress = address + (rom_bank - 1) * ROM_BANK_SIZE;
+                return rom[bankAddress % rom.Length];
+            }
 
-        public CartridgeRamType RAM_TYPE => (CartridgeRamType) data[0x149];
-
-        public bool validateHeader()
-        { // https://gbdev.io/pandocs/The_Cartridge_Header.html#014d--header-checksum
-            int checksum = data[0x134..0x14d].Aggregate(0, (total, each) => total - each - 1);
-
-            return checksum == data[0x14d];
+            return 0x0;
         }
 
-        public bool validateROM()
-        { // https://gbdev.io/pandocs/The_Cartridge_Header.html#014e-014f--global-checksum
-            int checksum = data[..0x14d].Aggregate(0, (total, each) => total + each);
+        internal virtual byte ReadRam(ushort address)
+        {
+            if (!ram_enabled || RAMSize == CartridgeRAMSize.NONE)
+                return 0xFF;
 
-            return checksum == (ushort) (data[0x14e] << 8 | data[0x14f]);
+            var bankedAddress = (address - RAM_ADDRESS_START + ram_bank * RAMSize.BankSizeBytes()) % ram.Length;
+
+            return ram[bankedAddress];
         }
-
-        internal abstract byte ReadRom(ushort address);
 
         internal abstract void WriteRom(ushort address, byte value);
 
-        internal abstract byte ReadRam(ushort address);
+        internal virtual void WriteRam(ushort address, byte value)
+        {
+            if (!ram_enabled || RAMSize == CartridgeRAMSize.NONE)
+                return;
 
-        internal abstract void WriteRam(ushort address, byte value);
+            var bankedAddress = (address - RAM_ADDRESS_START + ram_bank * RAMSize.BankSizeBytes()) % ram.Length;
+
+            ram[bankedAddress] = value;
+        }
+
+        public string GameTitle => Encoding.ASCII.GetString(rom[0x134..0x13F]);
+
+        public string ManufacturerCode => Encoding.ASCII.GetString(rom[0x13F..0x143]);
+
+        public string MakerCode => rom[0x14B] switch
+        {
+            0x33 => Encoding.ASCII.GetString(rom[0x144..0x146]),
+            _ => Encoding.ASCII.GetString(new[] { rom[0x14B] })
+        };
+
+        public CartridgeROMSize ROMSize => (CartridgeROMSize)rom[0x148];
+
+        public CartridgeRAMSize RAMSize => (CartridgeRAMSize)rom[0x149];
+
+        public CartridgeDestinationCode DestinationCode => (CartridgeDestinationCode)rom[0x14A];
+
+        public byte RomVersion => rom[0x14C];
+
+        public byte HeaderChecksum => rom[0x14D];
+
+        public ushort ROMChecksum => (ushort)(rom[0x14E] << 8 | rom[0x14F]);
+
+        public bool IsHeaderValid()
+        {
+            var calculatedChecksum = rom[0x134..0x14D].Aggregate(0, (c, b) => c - b - 1);
+
+            return (byte)calculatedChecksum == HeaderChecksum;
+        }
+
+        public bool IsROMChecksumValid()
+        {
+            var calculatedChecksum = rom[..0x14D].Aggregate(0, (i, b) => i + b);
+            return (ushort)calculatedChecksum == ROMChecksum;
+        }
+
+        public override string ToString()
+        {
+            return $"{GameTitle} - {ManufacturerCode} - {MakerCode}";
+        }
     }
-
 }

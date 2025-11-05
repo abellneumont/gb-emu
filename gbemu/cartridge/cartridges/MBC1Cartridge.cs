@@ -1,57 +1,55 @@
-namespace gbemu.cartridge {
-
-    internal class MBC1Cartridge : RomCartridge
+﻿namespace gbemu.cartridge
+{
+    internal class MBC1Cartridge : Cartridge
     {
-
-        private readonly byte[] bank_registers;
+        private byte bank_register1;
+        private byte bank_register2;
         private byte mode_register;
-        private int offset_low_rom, offset_high_rom;
+        private int offset_low;
+        private int offset_high;
 
-        public MBC1Cartridge(byte[] data) : base(data)
+        public MBC1Cartridge(byte[] contents) : base(contents)
         {
-            this.bank_registers = new byte[2];
-            this.bank_registers[0] = 0x1;
-
-            UpdateBank();
+            bank_register1 = 0x1;
+            bank_register2 = 0x0;
+            UpdateBankValues();
         }
 
         internal override byte ReadRom(ushort address)
         {
-            int bank_address = address switch {
-                _ when (address < ROM_BANK_SIZE) => offset_low_rom + address,
-                _ when (address < ROM_BANK_SIZE * 2) => offset_high_rom + address,
+            var bankAddress = address switch
+            {
+                _ when (address < ROM_BANK_SIZE) => offset_low + address,
+                _ when (address < ROM_BANK_SIZE * 2) => offset_high + address,
                 _ => 0x0
-            };
+            } % rom.Length; // TODO - Is this wrapping behavior correct?
 
-            return data[bank_address];
+            return rom[bankAddress];
         }
 
         internal override void WriteRom(ushort address, byte value)
         {
-            if (address <= 0x1fff)
-                ram_enabled = (value & 0x0f) == 0x0a;
-            
-            if (address >= 0x2000 && address <= 0x3fff)
+            if (address <= 0x1FFF)
+                ram_enabled = (value & 0x0F) == 0x0A;
+            else if (address >= 0x2000 && address <= 0x3FFF)
             {
-                int register = value & 0x1f;
-                bank_registers[0] = (byte) (register == 0x0 ? 0x1 : register);
+                var regValue = value & 0x1F;
+                bank_register1 = (byte)(regValue == 0x0 ? 0x1 : regValue);
             }
-            
-            if (address >= 0x4000 && address <= 0x5fff)
-                bank_registers[1] = (byte) (value & 0x3);
-            
-            if (address >= 0x6000 && address <= 0x7fff)
-                mode_register = (byte) (value & 0x1);
+            else if (address >= 0x4000 && address <= 0x5FFF)
+                bank_register2 = (byte)(value & 0x3);
+            else if (address >= 0x6000 && address <= 0x7FFF)
+                mode_register = (byte)(value & 0x1);
 
-            UpdateBank();
+            UpdateBankValues();
         }
 
-        private void UpdateBank()
+        private void UpdateBankValues()
         {
-            this.ram_bank = (mode_register == 0x0 ? 0x0 : bank_registers[1]);
-
-            offset_low_rom = mode_register == 0x0 ? 0x0 : (bank_registers[1] << 5) * ROM_BANK_SIZE;
-            offset_high_rom = ((bank_registers[1] << 5 | bank_registers[0]) - 1) * ROM_BANK_SIZE;
+            ram_bank = (mode_register == 0x0 ? 0x0 : bank_register2);
+            var romBank = bank_register2 << 5 | bank_register1;
+            offset_high = (romBank - 1) * ROM_BANK_SIZE;
+            offset_low = mode_register == 0x0 ? 0x0 : (bank_register2 << 5) * ROM_BANK_SIZE;
         }
     }
 }

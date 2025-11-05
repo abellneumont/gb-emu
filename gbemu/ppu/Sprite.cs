@@ -1,27 +1,23 @@
 ﻿namespace gbemu.ppu
 {
-
-    internal enum SpritePriority
-    {
-        Above, Normal
-    }
-
     internal class Sprite
     {
-
-        internal SpritePriority Priority { get; set; }
-
-        internal int X { get; set; } = -8;
+        internal SpritePriority SpriteToBgPriority { get; set; }
 
         internal int Y { get; set; } = -16;
 
-        internal int Tile { get; set; } = 0;
+        internal int X { get; set; } = -8;
 
-        internal bool Palette { get; set; } = false;
-
-        internal bool XFlip { get; set; } = false;
+        internal int TileNumber { get; set; } = 0;
 
         internal bool YFlip { get; set; } = false;
 
+        internal bool XFlip { get; set; } = false;
+
+        internal bool UsePalette1 { get; set; } = false;
+
+        internal int VRAMBankNumber { get; set; } = 0;
+
+        internal int CGBPaletteNumber { get; set; } = 0;
     }
 }
