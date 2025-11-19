@@ -16,8 +16,8 @@ namespace gbemu.ppu
         private readonly byte[] vram_bank1 = new byte[VRAM_SIZE];
         private readonly byte[] oam_ram = new byte[OAM_RAM_SIZE];
         private byte vram_bank;
-        private readonly byte[] _frameBuffer = new byte[Device.SCREEN_HEIGHT * Device.SCREEN_WIDTH * 4];
-        private readonly byte[] _tileBuffer = new byte[Device.SCREEN_HEIGHT * Device.SCREEN_WIDTH];
+        private readonly byte[] frame_buffer = new byte[Device.SCREEN_HEIGHT * Device.SCREEN_WIDTH * 4];
+        private readonly byte[] tile_buffer = new byte[Device.SCREEN_HEIGHT * Device.SCREEN_WIDTH];
         private int current_scanline_cycles;
         private int current_scanline;
         private int window_lines_skipped;
@@ -28,16 +28,16 @@ namespace gbemu.ppu
         private readonly Sprite[] sprintes_line = new Sprite[10];
         private readonly DMGSpriteComparer sprite_converter = new DMGSpriteComparer();
 
-        private readonly Sprite[] _sprites = {
-            new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(),
-            new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(),
-            new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(),
-            new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite(), new Sprite()
-        };
+        private readonly Sprite[] sprites = new Sprite[50];
 
         internal PPU(Device device)
         {
             this.device = device;
+
+            for (int i = 0; i < sprites.Length; i++)
+            {
+                sprites[i] = new Sprite();
+            }
         }
 
         internal byte GetVRAMBankRegister()
@@ -77,33 +77,33 @@ namespace gbemu.ppu
             switch (modAddress & 0x3)
             {
                 case 0:
-                    _sprites[spriteNumber].Y = value - 16;
+                    sprites[spriteNumber].Y = value - 16;
                     break;
                 case 1:
-                    _sprites[spriteNumber].X = value - 8;
+                    sprites[spriteNumber].X = value - 8;
                     break;
                 case 2:
-                    _sprites[spriteNumber].TileNumber = value;
+                    sprites[spriteNumber].TileNumber = value;
                     break;
                 case 3:
-                    _sprites[spriteNumber].SpriteToBgPriority = (value & 0x80) == 0x80 ? SpritePriority.BehindColors123 : SpritePriority.Above;
-                    _sprites[spriteNumber].YFlip = (value & 0x40) == 0x40;
-                    _sprites[spriteNumber].XFlip = (value & 0x20) == 0x20;
-                    _sprites[spriteNumber].UsePalette1 = (value & 0x10) == 0x10;
-                    _sprites[spriteNumber].VRAMBankNumber = (value & 0x8) >> 3;
-                    _sprites[spriteNumber].CGBPaletteNumber = value & 0x7;
+                    sprites[spriteNumber].SpriteToBgPriority = (value & 0x80) == 0x80 ? SpritePriority.BehindColors123 : SpritePriority.Above;
+                    sprites[spriteNumber].YFlip = (value & 0x40) == 0x40;
+                    sprites[spriteNumber].XFlip = (value & 0x20) == 0x20;
+                    sprites[spriteNumber].UsePalette1 = (value & 0x10) == 0x10;
+                    sprites[spriteNumber].VRAMBankNumber = (value & 0x8) >> 3;
+                    sprites[spriteNumber].CGBPaletteNumber = value & 0x7;
                     break;
             }
         }
 
         internal byte[] GetCurrentFrame()
         {
-            return _frameBuffer;
+            return frame_buffer;
         }
 
         internal void Step()
         {
-            if (!device.ppu_registers.IsLcdOn) return;
+            if (!device.ppu_registers.lcd_on) return;
 
             current_scanline_cycles = (current_scanline_cycles + 4) % CLOCK_CYCLES_FOR_SCANLINE;
 
@@ -121,39 +121,39 @@ namespace gbemu.ppu
                     scanline_priorities[ii / 4] = ScanlineBgPriority.NORMAL;
                 }
 
-                if (device.ppu_registers.IsBackgroundEnabled)
+                if (device.ppu_registers.background_enabled)
                 {
                     DrawBackground();
                 }
 
-                if (device.ppu_registers.AreSpritesEnabled)
+                if (device.ppu_registers.sprites_enabled)
                 {
                     DrawSprites();
                 }
 
                 Array.Copy(scanline, 0,
-                    _frameBuffer, current_scanline * Device.SCREEN_WIDTH * 4,
+                    frame_buffer, current_scanline * Device.SCREEN_WIDTH * 4,
                     scanline.Length);
             }
         }
 
         private void DrawSprites()
         {
-            var spriteSize = device.ppu_registers.LargeSprites ? 16 : 8;
-            var spritesFoundOnLine = 0;
+            var sprite_size = device.ppu_registers.large_sprites ? 16 : 8;
+            var sprites_on_line = 0;
 
             Array.Clear(sprintes_line, 0, sprintes_line.Length);
             for (var spriteIndex = 0; spriteIndex < MAX_SPRITES_PER_FRAME; spriteIndex++)
             {
-                if (spritesFoundOnLine == MAX_SPRITES_PER_SCANLINE) break;
+                if (sprites_on_line == MAX_SPRITES_PER_SCANLINE) break;
 
-                var sprite = _sprites[spriteIndex];
+                var sprite = sprites[spriteIndex];
 
-                if (current_scanline < sprite.Y || current_scanline >= sprite.Y + spriteSize) continue;
+                if (current_scanline < sprite.Y || current_scanline >= sprite.Y + sprite_size) continue;
 
-                sprintes_line[spritesFoundOnLine] = sprite;
+                sprintes_line[sprites_on_line] = sprite;
 
-                spritesFoundOnLine++;
+                sprites_on_line++;
             }
 
             if (device.device_mode == DeviceType.DMG)
@@ -166,20 +166,20 @@ namespace gbemu.ppu
                 var sprite = sprintes_line[spriteIndex];
                 if (sprite == null) continue;
 
-                var tileNumber = spriteSize == 8 ? sprite.TileNumber : sprite.TileNumber & 0xFE;
+                var tile_num = sprite_size == 8 ? sprite.TileNumber : sprite.TileNumber & 0xFE;
                 var palette = sprite.UsePalette1
                     ? device.ppu_registers.ObjectPaletteData1
                     : device.ppu_registers.ObjectPaletteData0;
 
-                var tileAddress = sprite.YFlip ?
-                    tileNumber * 16 + (spriteSize - 1 - (current_scanline - sprite.Y)) * 2 :
-                    tileNumber * 16 + (current_scanline - sprite.Y) * 2;
+                var tile_address = sprite.YFlip ?
+                    tile_num * 16 + (sprite_size - 1 - (current_scanline - sprite.Y)) * 2 :
+                    tile_num * 16 + (current_scanline - sprite.Y) * 2;
                 var b1 = sprite.VRAMBankNumber == 0
-                    ? vram_bank0[tileAddress]
-                    : vram_bank1[tileAddress];
+                    ? vram_bank0[tile_address]
+                    : vram_bank1[tile_address];
                 var b2 = sprite.VRAMBankNumber == 0
-                    ? vram_bank0[tileAddress + 1]
-                    : vram_bank1[tileAddress + 1];
+                    ? vram_bank0[tile_address + 1]
+                    : vram_bank1[tile_address + 1];
 
                 for (var x = 0; x < 8; x++)
                 {
@@ -187,15 +187,15 @@ namespace gbemu.ppu
                     if (pixel < 0 || pixel >= Device.SCREEN_WIDTH) continue;
                     if (scanline_priorities[pixel] == ScanlineBgPriority.PRIORITY && !device.ppu_registers.IsCgbSpriteMasterPriorityOn) continue;
 
-                    var colorBit = sprite.XFlip ? x : 7 - x;
-                    var colorBitMask = 1 << colorBit;
-                    var colorNumber =
-                        ((b2 & colorBitMask) == colorBitMask ? 2 : 0) +
-                        ((b1 & colorBitMask) == colorBitMask ? 1 : 0);
+                    var color_bit = sprite.XFlip ? x : 7 - x;
+                    var color_mask = 1 << color_bit;
+                    var color_num =
+                        ((b2 & color_mask) == color_mask ? 2 : 0) +
+                        ((b1 & color_mask) == color_mask ? 1 : 0);
 
-                    if (colorNumber == 0) continue;
+                    if (color_num == 0) continue;
 
-                    var (r, g, b) = device.ppu_registers.GetColorFromNumberPalette(colorNumber, palette).BaseRgb();
+                    var (r, g, b) = device.ppu_registers.GetColorFromNumberPalette(color_num, palette).BaseRgb();
 
                     if (!device.ppu_registers.IsCgbSpriteMasterPriorityOn &&
                         sprite.SpriteToBgPriority == SpritePriority.BehindColors123 &&
@@ -213,66 +213,65 @@ namespace gbemu.ppu
         {
             for (var pixel = 0; pixel < Device.SCREEN_WIDTH; pixel++)
             {
-                int xPos, yPos, tileMapAddress;
+                int x, y, tileMapAddress;
                 if (UsingWindowForScanline && pixel >= device.ppu_registers.WindowX - 7)
                 {
-                    yPos = (current_scanline - device.ppu_registers.WindowY - window_lines_skipped) & 0xFF;
-                    xPos = (pixel - device.ppu_registers.WindowX + 7) & 0xFF;
-                    tileMapAddress = device.ppu_registers.WindowTileMapOffset;
+                    y = (current_scanline - device.ppu_registers.WindowY - window_lines_skipped) & 0xFF;
+                    x = (pixel - device.ppu_registers.WindowX + 7) & 0xFF;
+                    tileMapAddress = device.ppu_registers.window_tile_offset;
                     scanline_used_window = true;
                     frame_uses_window = true;
                 }
                 else
                 {
-                    yPos = (current_scanline + device.ppu_registers.ScrollY) & 0xFF;
-                    xPos = (pixel + device.ppu_registers.ScrollX) & 0xFF;
-                    tileMapAddress = device.ppu_registers.BackgroundTileMapOffset;
+                    y = (current_scanline + device.ppu_registers.ScrollY) & 0xFF;
+                    x = (pixel + device.ppu_registers.ScrollX) & 0xFF;
+                    tileMapAddress = device.ppu_registers.background_tile_offset;
                 }
 
-                var tileRow = yPos / 8 * 32;
-                var tileLine = yPos % 8 * 2;
-                var tileCol = xPos / 8;
-                var tileNumberAddress = (ushort)((tileMapAddress + tileRow + tileCol) & 0xFFFF);
+                var tile_row = y / 8 * 32;
+                var tile_line = y % 8 * 2;
+                var tile_column = x / 8;
+                var tile_num_address = (ushort)((tileMapAddress + tile_row + tile_column) & 0xFFFF);
 
-                var tileNumber = vram_bank0[tileNumberAddress - 0x8000];
+                var tileNumber = vram_bank0[tile_num_address - 0x8000];
 
-                _tileBuffer[current_scanline * Device.SCREEN_WIDTH + pixel] = tileNumber;
+                tile_buffer[current_scanline * Device.SCREEN_WIDTH + pixel] = tileNumber;
 
                 var flagsByte = device.device_mode == DeviceType.CGB
-                    ? vram_bank1[tileNumberAddress - 0x8000]
+                    ? vram_bank1[tile_num_address - 0x8000]
                     : 0x0;
-                var paletteNumber = flagsByte & 0x7;
-                var vramBankNumber = (flagsByte & 0x8) >> 3;
-                var xFlip = (flagsByte & 0x20) >> 5 != 0;
-                var yFlip = (flagsByte & 0x40) >> 6 != 0;
-                var bgToOamPriority = (flagsByte & 0x80) >> 7;
+                var vram_bank_num = (flagsByte & 0x8) >> 3;
+                var x_flip = (flagsByte & 0x20) >> 5 != 0;
+                var y_flip = (flagsByte & 0x40) >> 6 != 0;
+                var bg_oam_priority = (flagsByte & 0x80) >> 7;
 
-                var tileDataAddress = yFlip
-                    ? GetTileDataAddress(tileNumber) + 14 - tileLine
-                    : GetTileDataAddress(tileNumber) + tileLine;
+                var tile_data_address = y_flip
+                    ? GetTileDataAddress(tileNumber) + 14 - tile_line
+                    : GetTileDataAddress(tileNumber) + tile_line;
 
-                var byte1 = vramBankNumber == 0
-                    ? vram_bank0[tileDataAddress & 0xFFFF - 0x8000]
-                    : vram_bank1[tileDataAddress & 0xFFFF - 0x8000];
-                var byte2 = vramBankNumber == 0
-                    ? vram_bank0[(tileDataAddress + 1) & 0xFFFF - 0x8000]
-                    : vram_bank1[(tileDataAddress + 1) & 0xFFFF - 0x8000];
+                var byte1 = vram_bank_num == 0
+                    ? vram_bank0[tile_data_address & 0xFFFF - 0x8000]
+                    : vram_bank1[tile_data_address & 0xFFFF - 0x8000];
+                var byte2 = vram_bank_num == 0
+                    ? vram_bank0[(tile_data_address + 1) & 0xFFFF - 0x8000]
+                    : vram_bank1[(tile_data_address + 1) & 0xFFFF - 0x8000];
 
-                var colorBit = xFlip ? xPos % 8 : 7 - xPos % 8;
-                var colorBitMask = 1 << colorBit;
-                var colorNumber =
-                    ((byte2 & colorBitMask) == colorBitMask ? 2 : 0) +
-                    ((byte1 & colorBitMask) == colorBitMask ? 1 : 0);
+                var color_bit = x_flip ? x % 8 : 7 - x % 8;
+                var color_mask = 1 << color_bit;
+                var color_num =
+                    ((byte2 & color_mask) == color_mask ? 2 : 0) +
+                    ((byte1 & color_mask) == color_mask ? 1 : 0);
 
-                var (r, g, b) =  device.ppu_registers.GetColorFromNumberPalette(colorNumber, device.ppu_registers.BackgroundPaletteData).BaseRgb();
+                var (r, g, b) =  device.ppu_registers.GetColorFromNumberPalette(color_num, device.ppu_registers.BackgroundPaletteData).BaseRgb();
 
                 scanline[pixel * 4 + 3] = 0xFF;
                 scanline[pixel * 4 + 2] = r;
                 scanline[pixel * 4 + 1] = g;
                 scanline[pixel * 4 + 0] = b;
 
-                if (colorNumber == 0) scanline_priorities[pixel] = ScanlineBgPriority.COLOR;
-                else if (bgToOamPriority == 1) scanline_priorities[pixel] = ScanlineBgPriority.PRIORITY;
+                if (color_num == 0) scanline_priorities[pixel] = ScanlineBgPriority.COLOR;
+                else if (bg_oam_priority == 1) scanline_priorities[pixel] = ScanlineBgPriority.PRIORITY;
                 else scanline_priorities[pixel] = ScanlineBgPriority.NORMAL;
             }
 
@@ -290,25 +289,25 @@ namespace gbemu.ppu
         private int Mode3CyclesOnCurrentLine()
         {
             var cycles = 172 + (device.ppu_registers.ScrollX & 0x7);
-            var spriteSize = device.ppu_registers.LargeSprites ? 16 : 8;
-            var spritesFoundOnLine = 0;
-            foreach (var sprite in _sprites)
+            var sprite_size = device.ppu_registers.large_sprites ? 16 : 8;
+            var sprites_on_line = 0;
+            foreach (var sprite in sprites)
             {
-                if (spritesFoundOnLine == MAX_SPRITES_PER_SCANLINE - 1) break;
-                if (current_scanline < sprite.Y || current_scanline >= sprite.Y + spriteSize) continue;
+                if (sprites_on_line == MAX_SPRITES_PER_SCANLINE - 1) break;
+                if (current_scanline < sprite.Y || current_scanline >= sprite.Y + sprite_size) continue;
 
                 cycles += 6 + Math.Min(0, 5 - (sprite.X % 8));
-                spritesFoundOnLine++;
+                sprites_on_line++;
             }
 
             return cycles;
         }
 
-        private bool SetLCDStatus(int currentScanLine, int currentTCyclesInScanline)
+        private bool SetLCDStatus(int current_scanline, int current_cycles_in_scanline)
         {
-            var oldMode = device.ppu_registers.StatMode;
+            var old_mode = device.ppu_registers.StatMode;
 
-            if (currentScanLine >= Device.SCREEN_HEIGHT)
+            if (current_scanline >= Device.SCREEN_HEIGHT)
             {
                 device.ppu_registers.StatMode = StateMode.V_BLANK_PERIOD;
             }
@@ -322,14 +321,14 @@ namespace gbemu.ppu
                 };
             }
 
-            if (oldMode != device.ppu_registers.StatMode)
+            if (old_mode != device.ppu_registers.StatMode)
             {
                 switch (device.ppu_registers.StatMode)
                 {
                     case StateMode.H_BLANK_PERIOD:
                         return true;
                     case StateMode.V_BLANK_PERIOD:
-                        device.renderer.HandleVBlankEvent(_frameBuffer, device.timer_cycles);
+                        device.renderer.HandleVBlankEvent(frame_buffer, device.timer_cycles);
                         device.interrupt_registers.RequestInterrupt(Interrupt.VERTICAL_BLANK);
 
                         window_lines_skipped = 0;
@@ -347,35 +346,36 @@ namespace gbemu.ppu
 
             if (device.device_type == DeviceType.DMG)
             {
-                device.ppu_registers.LYRegister = PPUTimingDetails.LYByLineAndClockDMG[currentScanLine][currentTCyclesInScanline / 4];
+                device.ppu_registers.LYRegister = PPUTimingDetails.LYByLineAndClockDMG[current_scanline][current_cycles_in_scanline / 4];
             }
             else if (device.device_type == DeviceType.CGB && device.device_mode == DeviceType.DMG)
             {
-                device.ppu_registers.LYRegister = PPUTimingDetails.LYByLineAndClockCGBDMGMode[currentScanLine][currentTCyclesInScanline / 4];
+                device.ppu_registers.LYRegister = PPUTimingDetails.LYByLineAndClockCGBDMGMode[current_scanline][current_cycles_in_scanline / 4];
             }
             else if (device.device_type == DeviceType.CGB && device.device_mode == DeviceType.CGB)
             {
-                device.ppu_registers.LYRegister = PPUTimingDetails.LYByLineAndClockCGBMode[currentScanLine][currentTCyclesInScanline / 4];
+                device.ppu_registers.LYRegister = PPUTimingDetails.LYByLineAndClockCGBMode[current_scanline][current_cycles_in_scanline / 4];
             }
 
             return false;
         }
 
-        private bool UsingWindowForScanline => device.ppu_registers.IsWindowEnabled && current_scanline >= device.ppu_registers.WindowY;
+        private bool UsingWindowForScanline => device.ppu_registers.window_enabled && current_scanline >= device.ppu_registers.WindowY;
 
-        private ushort GetTileDataAddress(byte tileNumber)
+        private ushort GetTileDataAddress(byte tile_num)
         {
-            var tilesetAddress = device.ppu_registers.BackgroundAndWindowTilesetOffset;
-            ushort tileDataAddress;
-            if (device.ppu_registers.UsingSignedByteForTileData)
+            var tileset_address = device.ppu_registers.background_and_window_tile_offset;
+            ushort tile_data_address;
+
+            if (device.ppu_registers.signed_tile_data)
             {
-                tileDataAddress = (ushort)(tilesetAddress + ((sbyte)tileNumber + 128) * 16);
+                tile_data_address = (ushort)(tileset_address + ((sbyte)tile_num + 128) * 16);
             }
             else
             {
-                tileDataAddress = (ushort)(tilesetAddress + tileNumber * 16);
+                tile_data_address = (ushort)(tileset_address + tile_num * 16);
             }
-            return tileDataAddress;
+            return tile_data_address;
         }
 
 

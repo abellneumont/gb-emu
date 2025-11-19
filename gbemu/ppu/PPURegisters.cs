@@ -4,15 +4,15 @@ namespace gbemu.ppu
 {
     internal class PPURegisters
     {
-        private readonly Device _device;
+        private readonly Device device;
 
         internal PPURegisters(Device device)
         {
-            _device = device;
+            this.device = device;
 
-            if (_device.device_type == DeviceType.CGB)
+            if (this.device.device_type == DeviceType.CGB)
             {
-                IsBackgroundEnabled = true;
+                background_enabled = true;
             }
         }
 
@@ -32,13 +32,13 @@ namespace gbemu.ppu
 
         internal byte LYRegister { get; set; }
 
-        private byte _lyCompare;
+        private byte ly_compare;
         internal byte LYCompare
         {
-            get => _lyCompare;
+            get => ly_compare;
             set
             {
-                _lyCompare = value;
+                ly_compare = value;
 
                 UpdateStatIRQSignal();
             }
@@ -54,41 +54,41 @@ namespace gbemu.ppu
                 _ => throw new ArgumentOutOfRangeException()
             };
 
-        internal bool IsLcdOn { get; private set; }
-        internal int WindowTileMapOffset { get; private set; }
-        internal bool IsWindowEnabled { get; private set; }
-        internal int BackgroundAndWindowTilesetOffset { get; private set; }
-        internal bool UsingSignedByteForTileData { get; private set; }
-        internal int BackgroundTileMapOffset { get; private set; }
-        internal bool LargeSprites { get; private set; }
-        internal bool AreSpritesEnabled { get; private set; }
-        internal bool IsBackgroundEnabled { get; private set; }
+        internal bool lcd_on { get; private set; }
+        internal int window_tile_offset { get; private set; }
+        internal bool window_enabled { get; private set; }
+        internal int background_and_window_tile_offset { get; private set; }
+        internal bool signed_tile_data { get; private set; }
+        internal int background_tile_offset { get; private set; }
+        internal bool large_sprites { get; private set; }
+        internal bool sprites_enabled { get; private set; }
+        internal bool background_enabled { get; private set; }
         internal bool IsCgbSpriteMasterPriorityOn { get; private set; }
 
-        private byte _lcdControlRegister;
+        private byte lcd_control_register;
         internal byte LCDControlRegister
         {
-            get => _lcdControlRegister;
+            get => lcd_control_register;
             set
             {
-                _lcdControlRegister = value;
-                IsLcdOn = (value & 0x80) == 0x80;
-                WindowTileMapOffset = (value & 0x40) == 0x40 ? 0x9C00 : 0x9800;
-                IsWindowEnabled = (value & 0x20) == 0x20;
-                BackgroundAndWindowTilesetOffset = (value & 0x10) == 0x10 ? 0x8000 : 0x8800;
-                UsingSignedByteForTileData = BackgroundAndWindowTilesetOffset == 0x8800;
-                BackgroundTileMapOffset = (value & 0x8) == 0x8 ? 0x9C00 : 0x9800;
-                LargeSprites = (value & 0x4) == 0x4;
-                AreSpritesEnabled = (value & 0x2) == 0x2;
-                IsBackgroundEnabled = (value & 0x1) == 0x1;
+                lcd_control_register = value;
+                lcd_on = (value & 0x80) == 0x80;
+                window_tile_offset = (value & 0x40) == 0x40 ? 0x9C00 : 0x9800;
+                window_enabled = (value & 0x20) == 0x20;
+                background_and_window_tile_offset = (value & 0x10) == 0x10 ? 0x8000 : 0x8800;
+                signed_tile_data = background_and_window_tile_offset == 0x8800;
+                background_tile_offset = (value & 0x8) == 0x8 ? 0x9C00 : 0x9800;
+                large_sprites = (value & 0x4) == 0x4;
+                sprites_enabled = (value & 0x2) == 0x2;
+                background_enabled = (value & 0x1) == 0x1;
 
-                if (!IsLcdOn)
+                if (!lcd_on)
                 {
-                    _device.ppu.TurnLCDOff();
+                    device.ppu.TurnLCDOff();
 
                     LYRegister = 0x0;
                     StatMode = StateMode.H_BLANK_PERIOD;
-                    _statIRQSignal = false;
+                    state_irq_signal = false;
                 }
                 else
                 {
@@ -97,17 +97,17 @@ namespace gbemu.ppu
             }
         }
 
-        private byte _statRegister = 0x80;
-        private bool _statIRQSignal;
+        private byte state_register = 0x80;
+        private bool state_irq_signal;
 
-        internal byte StatRegister
+        internal byte StateRegister
         {
-            get => _statRegister;
+            get => state_register;
             set
             {
                 var s = value | 0x80;
                 s &= 0xF8;
-                _statRegister = (byte)s;
+                state_register = (byte)s;
                 IsLYLCCheckEnabled = (value & 0x40) == 0x40;
                 Mode2OAMCheckEnabled = (value & 0x20) == 0x20;
                 Mode1VBlankCheckEnabled = (value & 0x10) == 0x10;
@@ -119,19 +119,20 @@ namespace gbemu.ppu
 
         private void UpdateStatIRQSignal()
         {
-            if (!IsLcdOn) return;
-            var oldStatIRQSignal = _statIRQSignal;
+            if (!lcd_on) return;
 
-            CoincidenceFlag = _lyCompare == LYRegister;
+            var old_irq_signal = state_irq_signal;
 
-            _statIRQSignal = (IsLYLCCheckEnabled && LYRegister == _lyCompare) ||
+            CoincidenceFlag = ly_compare == LYRegister;
+
+            state_irq_signal = (IsLYLCCheckEnabled && LYRegister == ly_compare) ||
                              (StatMode == StateMode.H_BLANK_PERIOD && Mode0HBlankCheckEnabled) ||
                              (StatMode == StateMode.OAM_RAM_PERIOD && Mode2OAMCheckEnabled) ||
                              (StatMode == StateMode.V_BLANK_PERIOD && (Mode1VBlankCheckEnabled || Mode2OAMCheckEnabled));
 
-            if (!oldStatIRQSignal && _statIRQSignal)
+            if (!old_irq_signal && state_irq_signal)
             {
-                _device.interrupt_registers.RequestInterrupt(interrupts.Interrupt.LCD_STATE);
+                device.interrupt_registers.RequestInterrupt(interrupts.Interrupt.LCD_STATE);
             }
         }
 
@@ -152,23 +153,23 @@ namespace gbemu.ppu
                 _coincidenceFlag = value;
                 if (value)
                 {
-                    _statRegister |= 0x4;
+                    state_register |= 0x4;
                 }
                 else
                 {
-                    _statRegister &= 0xFB;
+                    state_register &= 0xFB;
                 }
             }
         }
 
-        private StateMode _statMode;
+        private StateMode state_mode;
         internal StateMode StatMode
         {
-            get => _statMode;
+            get => state_mode;
             set
             {
-                _statMode = value;
-                _statRegister = (byte)((_statRegister & 0xFC) | (int)value);
+                state_mode = value;
+                state_register = (byte)((state_register & 0xFC) | (int)value);
 
                 UpdateStatIRQSignal();
             }

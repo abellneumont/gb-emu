@@ -86,7 +86,7 @@ namespace gbemu
             if (address == 0xFF40)
                 return device.ppu_registers.LCDControlRegister;
             if (address == 0xFF41)
-                return device.ppu_registers.StatRegister;
+                return device.ppu_registers.StateRegister;
             if (address == 0xFF42)
                 return device.ppu_registers.ScrollY;
             if (address == 0xFF43)
@@ -178,7 +178,7 @@ namespace gbemu
                 device.cartridge.WriteRom(address, value);
             else if (address >= 0x8000 && address <= 0x9FFF)
             {
-                if (!device.ppu_registers.IsLcdOn || device.ppu_registers.StatMode != StateMode.TRANSFERRING_DATA)
+                if (!device.ppu_registers.lcd_on || device.ppu_registers.StatMode != StateMode.TRANSFERRING_DATA)
                 {
                     device.ppu.WriteVRAMByte(address, value);
                 }
@@ -191,7 +191,7 @@ namespace gbemu
                 WriteToRam((ushort)(address - 0x2000), value);
             else if (address >= 0xFE00 && address <= 0xFE9F)
             {
-                if ((!device.ppu_registers.IsLcdOn ||
+                if ((!device.ppu_registers.lcd_on ||
                      device.ppu_registers.StatMode == StateMode.H_BLANK_PERIOD ||
                      device.ppu_registers.StatMode == StateMode.V_BLANK_PERIOD) && !device.dma_controller.BlocksOAMRAM())
                 {
@@ -228,7 +228,7 @@ namespace gbemu
             else if (address == 0xFF40)
                 device.ppu_registers.LCDControlRegister = value;
             else if (address == 0xFF41)
-                device.ppu_registers.StatRegister = value;
+                device.ppu_registers.StateRegister = value;
             else if (address == 0xFF42)
                 device.ppu_registers.ScrollY = value;
             else if (address == 0xFF43)
