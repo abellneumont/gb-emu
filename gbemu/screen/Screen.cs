@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using gbemu.cartridge;
 using gbemu.controller;
+using gbemu.sound;
 using sdl2cs;
 
 namespace gbemu.screen
@@ -19,6 +20,7 @@ namespace gbemu.screen
         private const int CLOCK_PER_INPUT = 35000;
         private int input_cooldown = CLOCK_PER_INPUT;
         private int delay_cooldown = CLOCK_PER_FRAME;
+        private NAudioSoundOutput sound_output;
 
         private readonly Dictionary<SDL2.SDL_Keycode, ControllerKey> key_map = new Dictionary<SDL2.SDL_Keycode, ControllerKey>
         {
@@ -48,8 +50,9 @@ namespace gbemu.screen
             SDL2.SDL_SetHint(SDL2.SDL_HINT_RENDER_SCALE_QUALITY, "0");
 
             var renderer = new Renderer(this.renderer, mode);
-            ms_per_frame = (int)((1.0 / fps) * 1000);
-            device = new Device(cartridge, DeviceType.DMG, renderer, boot_rom);
+            ms_per_frame = (int)(1.0 / fps * 1000);
+            sound_output = new NAudioSoundOutput();
+            device = new Device(cartridge, DeviceType.DMG, renderer, sound_output, boot_rom);
         }
 
         public void ExecuteProgram()
@@ -59,8 +62,8 @@ namespace gbemu.screen
             while (!quit)
             {
                 var clocks = device.Step();
-
                 input_cooldown -= clocks;
+
                 if (input_cooldown < 0)
                 {
                     input_cooldown += CLOCK_PER_INPUT;
@@ -68,14 +71,17 @@ namespace gbemu.screen
                 }
 
                 delay_cooldown -= clocks;
+
                 if (delay_cooldown < 0)
                 {
                     delay_cooldown += CLOCK_PER_FRAME;
-                    var msToSleep = ms_per_frame - (stopwatch.ElapsedTicks / (double)Stopwatch.Frequency) * 1000;
+                    var msToSleep = ms_per_frame - stopwatch.ElapsedTicks / (double)Stopwatch.Frequency * 1000;
+
                     if (msToSleep > 0)
                     {
                         SDL2.SDL_Delay((uint)msToSleep);
                     }
+
                     stopwatch.Restart();
                 }
             }
@@ -109,6 +115,7 @@ namespace gbemu.screen
 
         public void Dispose()
         {
+            sound_output?.Dispose();
             SDL2.SDL_DestroyRenderer(renderer);
             SDL2.SDL_DestroyWindow(window);
             SDL2.SDL_Quit();

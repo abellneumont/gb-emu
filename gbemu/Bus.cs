@@ -82,7 +82,7 @@ namespace gbemu
             if (address == 0xFF0F)
                 return device.interrupt_registers.InterruptFlags;
             if (address >= 0xFF10 && address <= 0xFF3F)
-                return 0xFF;
+                return device.apu.Read(address);
             if (address == 0xFF40)
                 return device.ppu_registers.LCDControlRegister;
             if (address == 0xFF41)
@@ -223,7 +223,8 @@ namespace gbemu
             else if (address >= 0xFF08 && address <= 0xFF0E) { }
             else if (address == 0xFF0F)
                 device.interrupt_registers.InterruptFlags = value;
-            else if (address >= 0xFF10 && address <= 0xFF3F) { }
+            else if (address >= 0xFF10 && address <= 0xFF3F)
+                device.apu.Write(address, value);
             else if (address == 0xFF40)
                 device.ppu_registers.LCDControlRegister = value;
             else if (address == 0xFF41)

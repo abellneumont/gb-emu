@@ -1,10 +1,12 @@
 ﻿using System.Collections.Generic;
+using System.Threading;
 using gbemu.ppu;
 using gbemu.cpu;
 using gbemu.cartridge;
 using gbemu.interrupts;
-using gbemu.timers;
 using gbemu.controller;
+using gbemu.sound;
+using System.Threading.Tasks;
 
 namespace gbemu
 {
@@ -27,13 +29,15 @@ namespace gbemu
         internal readonly InterruptRegisters interrupt_registers;
         internal readonly Cartridge cartridge;
         internal readonly PPU ppu;
-        internal readonly Timer timer;
+        internal readonly timers.Timer timer;
         internal readonly DMAController dma_controller;
         internal readonly ControllerHandler controller_handler;
-
+		internal readonly APU apu;
+        internal readonly ISoundOutput sound_output;
+        internal bool apu_running = true;
         internal bool double_speed = false;
         private bool step_ppu_on_next_double_speed_cycle = true;
-        public Device(Cartridge cartridge, DeviceType type, IRenderer renderer, byte[] boot_rom)
+        public Device(Cartridge cartridge, DeviceType type, IRenderer renderer, ISoundOutput sound_output, byte[] boot_rom)
         {
             device_type = type;
             device_mode = DeviceType.DMG;
@@ -48,14 +52,18 @@ namespace gbemu
             cpu = new CPU(this);
             cpu_enumerator = cpu.GetEnumerator();
             ppu = new PPU(this);
-            timer = new Timer(this);
+            timer = new timers.Timer(this);
             dma_controller = new DMAController(this);
             controller_handler = new ControllerHandler(this);
+            this.sound_output = sound_output;
+			apu = new APU(this);
 
             if (boot_rom == null)
             {
                 SkipBootRom();
             }
+
+            Task.Run(RunAPU);
         }
 
         public void SkipBootRom()
@@ -100,7 +108,6 @@ namespace gbemu
             }
 
             timer.Step();
-
             timer_cycles += 4;
 
             return 4;
@@ -114,6 +121,14 @@ namespace gbemu
         public void HandleKeyUp(ControllerKey key)
         {
             controller_handler.KeyUp(key);
+        }
+
+        private void RunAPU()
+        {
+            while (apu_running)
+            {
+                apu.Step(1);
+            }
         }
     }
 }
