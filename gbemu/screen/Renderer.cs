@@ -33,7 +33,21 @@ namespace gbemu.screen
                 }
             }
 
-            SDL2.SDL_RenderCopy(renderer, texture, IntPtr.Zero, IntPtr.Zero);
+            SDL2.SDL_GetRendererOutputSize(renderer, out var window_width, out var window_height);
+
+            var scale = Math.Min(window_width / Device.SCREEN_WIDTH, window_height / Device.SCREEN_HEIGHT);
+            var render_width = Device.SCREEN_WIDTH * scale;
+            var render_height = Device.SCREEN_HEIGHT * scale;
+
+            var destination = new SDL2.SDL_Rect
+            {
+                x = (window_width - render_width) / 2,
+                y = (window_height - render_height) / 2,
+                w = render_width,
+                h = render_height
+            };
+
+            SDL2.SDL_RenderCopy(renderer, texture, IntPtr.Zero, ref destination);
             SDL2.SDL_RenderPresent(renderer);
         }
 

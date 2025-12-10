@@ -41,7 +41,7 @@ namespace gbemu.screen
             SDL2.SDL_CreateWindowAndRenderer(
                 Device.SCREEN_WIDTH * pixel_size,
                 Device.SCREEN_HEIGHT * pixel_size,
-                0,
+                SDL2.SDL_WindowFlags.SDL_WINDOW_RESIZABLE,
                 out window,
                 out this.renderer);
             SDL2.SDL_SetRenderDrawColor(this.renderer, 0, 0, 0, 255);
@@ -89,7 +89,7 @@ namespace gbemu.screen
 
         private void CheckForInput()
         {
-            while (SDL2.SDL_PollEvent(out var e) != 0)
+            if (SDL2.SDL_PollEvent(out var e) != 0)
             {
                 switch (e.type)
                 {
